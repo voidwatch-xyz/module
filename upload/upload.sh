@@ -29,6 +29,7 @@ if [ $# -eq 0 ]; then
 fi
 DIR=$1
 OUT="$DIR/outbox" IN="$DIR/inbox" TOKEN_FILE="$DIR/.token"
+[ -f "$TOKEN_FILE" ] && chmod 600 "$TOKEN_FILE"
 mkdir -p "$IN"
 last_capture=0 last_status=0 last_minimap=0 minimap_check=0 status_every=30
 
@@ -53,7 +54,7 @@ while :; do
   if [ ! -s "$TOKEN_FILE" ]; then
     if [ -f "$OUT/pair-request.json" ]; then
       reply=$(curl -fsS -m 10 -X POST -H "Content-Type: application/json" --data-binary "@$OUT/pair-request.json" "$API/pair") && {
-        printf '%s' "$reply" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' > "$TOKEN_FILE"
+        (umask 077; printf '%s' "$reply" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' > "$TOKEN_FILE")
         printf '%s' "$reply" | sed 's/"token":"[^"]*",\{0,1\}//' > "$IN/pair.json"
       }
     fi
