@@ -1,0 +1,12 @@
+Module
+  name: voidwatch
+  description: Writes the character state for the Voidwatch upload script and runs the commands it brings back
+  author: Voidwatch
+  website: https://voidwatch.xyz/developers
+  version: 0.3.0
+  sandboxed: true
+  autoload: true
+  autoload-priority: 1000
+  scripts: [ voidwatch ]
+  @onLoad: Voidwatch.init()
+  @onUnload: Voidwatch.terminate()
