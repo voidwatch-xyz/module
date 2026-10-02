@@ -3,7 +3,7 @@ Module
   description: Writes the character state for the Voidwatch upload script and runs the commands it brings back
   author: Voidwatch
   website: https://voidwatch.xyz/developers
-  version: 0.5.2
+  version: 0.5.3
   sandboxed: true
   autoload: true
   autoload-priority: 1000
