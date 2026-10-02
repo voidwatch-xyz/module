@@ -41,9 +41,14 @@ if [ "${1:-}" != --worker ]; then
     fi
     want=$(sed -n 's/^\([0-9a-f]\{64\}\)  *voidwatch-module.zip$/\1/p' "$t/SHA256SUMS" | head -n 1)
     got=$({ shasum -a 256 "$t/m.zip" 2>/dev/null || sha256sum "$t/m.zip"; } | cut -d ' ' -f 1)
-    [ -n "$want" ] && [ "$want" = "$got" ] || { update_done "$d" '{"ok":false,"error":"the checksum does not match"}'; return; }
-    unzip -q "$t/m.zip" -d "$t/x" 2>/dev/null && [ "$(version_of "$t/x/voidwatch/voidwatch.otmod")" = "$v" ] \
-      || { update_done "$d" '{"ok":false,"error":"the zip holds another version"}'; return; }
+    if [ -z "$want" ] || [ "$want" != "$got" ]; then
+      update_done "$d" '{"ok":false,"error":"the checksum does not match"}'
+      return
+    fi
+    if ! unzip -q "$t/m.zip" -d "$t/x" 2>/dev/null || [ "$(version_of "$t/x/voidwatch/voidwatch.otmod")" != "$v" ]; then
+      update_done "$d" '{"ok":false,"error":"the zip holds another version"}'
+      return
+    fi
     old=$(version_of "$m/voidwatch.otmod")
     rm -rf "$d/backup"
     if ! mkdir -p "$d/backup" || ! cp -R "$m" "$d/backup/voidwatch" || ! printf '%s' "$old" > "$d/backup/version"; then
