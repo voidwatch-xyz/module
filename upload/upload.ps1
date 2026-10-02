@@ -5,9 +5,78 @@
 # hidden worker.
 param([string]$Dir = '', [switch]$Worker)
 $Home_ = Join-Path $env:LOCALAPPDATA 'Voidwatch'
+# module updates come from the GitHub releases, not from the website: a broken-into website cannot ship code
+$Releases = if ($env:VOIDWATCH_RELEASES) { $env:VOIDWATCH_RELEASES } else { 'https://github.com/voidwatch-xyz/module/releases' }
+$LatestApi = if ($env:VOIDWATCH_LATEST) { $env:VOIDWATCH_LATEST } else { 'https://api.github.com/repos/voidwatch-xyz/module/releases/latest' }
 
 if (-not $Worker) {
+  $latest = ''; $latestAt = [datetime]::MinValue
+  function Version-Of($otmod) {
+    $m = Select-String -Path $otmod -Pattern '^\s*version:\s*([0-9.]+)' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($m) { $m.Matches[0].Groups[1].Value } else { '' }
+  }
+  function Write-Text($path, $text) { [IO.File]::WriteAllText("$path.tmp", $text); Move-Item -Force "$path.tmp" $path }
+  # the module folder the client loads, next to the voidwatch folder in its write folder
+  function Module-Of($d) { Join-Path (Split-Path $d) 'modules\voidwatch' }
+  function Can-Write($m) {
+    if (-not (Test-Path (Join-Path $m 'voidwatch.otmod'))) { return $false }
+    try { [IO.File]::WriteAllText((Join-Path $m '.w'), ''); Remove-Item -Force (Join-Path $m '.w'); return $true } catch { return $false }
+  }
+  function Update-Done($d, $result) {
+    Write-Text (Join-Path $d 'update-result.json') ($result | ConvertTo-Json -Compress)
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d 'update-request.json'), (Join-Path $d 'rollback-request.json')
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $d '.update')
+  }
+  # an update the window asked for: the release zip, checked against its SHA256SUMS; the old folder stays as a backup
+  function Update-Module($d) {
+    $m = Module-Of $d; $t = Join-Path $d '.update'; $b = Join-Path $d 'backup'
+    $req = Get-Content (Join-Path $d 'update-request.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    $v = [string]$req.version; $by = [string]$req.by
+    if ($v -notmatch '^[0-9.]+$') { Update-Done $d @{ ok = $false; error = 'no version asked for' }; return }
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $t
+    New-Item -ItemType Directory -Force -Path $t | Out-Null
+    try {
+      Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Uri "$Releases/download/v$v/voidwatch-module.zip" -OutFile (Join-Path $t 'm.zip')
+      Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri "$Releases/download/v$v/SHA256SUMS" -OutFile (Join-Path $t 'SHA256SUMS')
+    } catch { Update-Done $d @{ ok = $false; error = 'the download failed' }; return }
+    $line = Select-String -Path (Join-Path $t 'SHA256SUMS') -Pattern '^([0-9a-f]{64})\s+voidwatch-module\.zip' | Select-Object -First 1
+    $want = if ($line) { $line.Matches[0].Groups[1].Value } else { '' }
+    $got = (Get-FileHash -Algorithm SHA256 (Join-Path $t 'm.zip')).Hash.ToLower()
+    if (-not $want -or $want -ne $got) { Update-Done $d @{ ok = $false; error = 'the checksum does not match' }; return }
+    try { Expand-Archive -Path (Join-Path $t 'm.zip') -DestinationPath (Join-Path $t 'x') -Force } catch { }
+    if ((Version-Of (Join-Path $t 'x\voidwatch\voidwatch.otmod')) -ne $v) { Update-Done $d @{ ok = $false; error = 'the zip holds another version' }; return }
+    $old = Version-Of (Join-Path $m 'voidwatch.otmod')
+    try {
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $b
+      New-Item -ItemType Directory -Force -Path $b | Out-Null
+      Copy-Item -Recurse $m (Join-Path $b 'voidwatch')
+      [IO.File]::WriteAllText((Join-Path $b 'version'), $old)
+    } catch { Update-Done $d @{ ok = $false; error = 'no backup could be made' }; return }
+    try {
+      Remove-Item -Recurse -Force $m
+      Move-Item (Join-Path $t 'x\voidwatch') $m
+    } catch {
+      Copy-Item -Recurse (Join-Path $b 'voidwatch') $m -ErrorAction SilentlyContinue
+      Update-Done $d @{ ok = $false; error = 'the swap failed' }; return
+    }
+    Update-Done $d @{ ok = $true; version = $v; from = $old; by = $by; at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+  }
+  function Rollback-Module($d) {
+    $m = Module-Of $d; $b = Join-Path $d 'backup'
+    $req = Get-Content (Join-Path $d 'rollback-request.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    if (-not (Test-Path (Join-Path $b 'voidwatch\voidwatch.otmod'))) { Update-Done $d @{ ok = $false; error = 'there is no backup' }; return }
+    $v = (Get-Content (Join-Path $b 'version') -Raw -ErrorAction SilentlyContinue).Trim()
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $m
+    Copy-Item -Recurse (Join-Path $b 'voidwatch') $m
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $b
+    Update-Done $d @{ ok = $true; version = $v; rollback = $true; by = [string]$req.by; at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+  }
   while ($true) {
+    # the newest release, asked at most every 6 hours: GitHub answers 60 questions an hour without an account
+    if (((Get-Date) - $latestAt).TotalHours -ge 6) {
+      $latestAt = Get-Date
+      try { $r = Invoke-RestMethod -TimeoutSec 20 -Uri $LatestApi; if ([string]$r.tag_name -match '^v([0-9.]+)$') { $latest = $matches[1] } } catch { }
+    }
     if ($Dir) {
       $found = @($Dir)
     } else {
@@ -28,6 +97,12 @@ if (-not $Worker) {
           Set-Content -Path $pidFile -Value $p.Id
         }
       }
+      $m = Module-Of $d
+      $writable = Can-Write $m
+      $backup = (Get-Content (Join-Path $d 'backup\version') -Raw -ErrorAction SilentlyContinue)
+      Write-Text (Join-Path $d 'latest.json') (@{ latest = $latest; updatable = $writable; backup = if ($backup) { $backup.Trim() } else { '' } } | ConvertTo-Json -Compress)
+      if ($writable -and (Test-Path (Join-Path $d 'update-request.json'))) { Update-Module $d }
+      if ($writable -and (Test-Path (Join-Path $d 'rollback-request.json'))) { Rollback-Module $d }
     }
     Start-Sleep -Seconds 2
   }
@@ -190,7 +265,7 @@ while (Test-Path $Dir) {
     }
 
     if ($statusEvery -le 2) {
-      Start-Sleep -Seconds 1
+      Start-Sleep -Milliseconds 500
     } elseif ($age -gt 300) {
       Start-Sleep -Seconds 10  # the client is closed or logged out: no request stays open
     } else {

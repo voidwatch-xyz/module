@@ -14,6 +14,13 @@ Voidwatch module and upload scripts                                          MIT
    until we let it in. You can also type the code on the Clients page on the website. The Voidwatch
    button in the top bar opens a window with the same code, and later with what the module sends.
 
+Updates: when a new module is out, the Voidwatch window shows "Update to X.Y.Z". Click it. The upload
+script downloads the release from GitHub, checks it, keeps the old module as a backup and the module
+reloads. "Roll back" puts the backup back. From module 0.5.x, update once by hand: steps 1 and 2, then
+run the setup again.
+
+Reset: "Reset loot and time" in the same window starts the loot, supplies and time from zero.
+
 Verified on Orion-OTS. Most other servers lock their client against modules.
 
 If the game message says the setup did not find the client, drop the folder it shows onto the setup file

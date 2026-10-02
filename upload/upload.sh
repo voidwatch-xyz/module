@@ -6,11 +6,76 @@
 # Every character has its own folder inside the voidwatch folder, and its own worker.
 set -u
 API=${VOIDWATCH_API:-https://voidwatch.xyz/api/v1}
+# module updates come from the GitHub releases, not from the website: a broken-into website cannot ship code
+RELEASES=${VOIDWATCH_RELEASES:-https://github.com/voidwatch-xyz/module/releases}
+LATEST_API=${VOIDWATCH_LATEST:-https://api.github.com/repos/voidwatch-xyz/module/releases/latest}
 
 if [ "${1:-}" != --worker ]; then
   HOME_DIR="$HOME/Library/Application Support/Voidwatch"
   [ -d "$HOME_DIR" ] || HOME_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/voidwatch"
+  latest="" latest_at=0
+  write_file() { printf '%s' "$2" > "$1.tmp" && mv -f "$1.tmp" "$1"; }
+  version_of() { sed -n 's/^ *version: *\([0-9.]*\).*/\1/p' "$1" 2>/dev/null | head -n 1; }
+  # the newest release, asked at most every 6 hours: GitHub answers 60 questions an hour without an account
+  check_latest() {
+    now=$(date +%s)
+    [ $((now - latest_at)) -lt 21600 ] && return
+    latest_at=$now
+    tag=$(curl -sS -m 20 "$LATEST_API" 2>/dev/null | sed -n 's/.*"tag_name": *"v\([0-9.]*\)".*/\1/p' | head -n 1)
+    [ -n "$tag" ] && latest=$tag
+  }
+  # the module folder the client loads, next to the voidwatch folder in its write folder
+  module_of() { printf '%s' "${1%/}/../modules/voidwatch"; }
+  update_done() { write_file "$1/update-result.json" "$2"; rm -f "$1/update-request.json" "$1/rollback-request.json"; rm -rf "$1/.update"; }
+  # an update the window asked for: the release zip, checked against its SHA256SUMS; the old folder stays as a backup
+  update_module() {
+    d=${1%/} m=$(module_of "$1") t="${1%/}/.update"
+    v=$(sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' "$d/update-request.json" | head -n 1)
+    by=$(sed -n 's/.*"by": *"\([^"]*\)".*/\1/p' "$d/update-request.json" | head -n 1)
+    rm -rf "$t" && mkdir -p "$t"
+    [ -n "$v" ] || { update_done "$d" '{"ok":false,"error":"no version asked for"}'; return; }
+    if ! curl -sSfL -m 120 -o "$t/m.zip" "$RELEASES/download/v$v/voidwatch-module.zip" 2>/dev/null \
+      || ! curl -sSfL -m 30 -o "$t/SHA256SUMS" "$RELEASES/download/v$v/SHA256SUMS" 2>/dev/null; then
+      update_done "$d" '{"ok":false,"error":"the download failed"}'
+      return
+    fi
+    want=$(sed -n 's/^\([0-9a-f]\{64\}\)  *voidwatch-module.zip$/\1/p' "$t/SHA256SUMS" | head -n 1)
+    got=$({ shasum -a 256 "$t/m.zip" 2>/dev/null || sha256sum "$t/m.zip"; } | cut -d ' ' -f 1)
+    [ -n "$want" ] && [ "$want" = "$got" ] || { update_done "$d" '{"ok":false,"error":"the checksum does not match"}'; return; }
+    unzip -q "$t/m.zip" -d "$t/x" 2>/dev/null && [ "$(version_of "$t/x/voidwatch/voidwatch.otmod")" = "$v" ] \
+      || { update_done "$d" '{"ok":false,"error":"the zip holds another version"}'; return; }
+    old=$(version_of "$m/voidwatch.otmod")
+    rm -rf "$d/backup"
+    if ! mkdir -p "$d/backup" || ! cp -R "$m" "$d/backup/voidwatch" || ! printf '%s' "$old" > "$d/backup/version"; then
+      update_done "$d" '{"ok":false,"error":"no backup could be made"}'
+      return
+    fi
+    rm -rf "$m"
+    if ! mv "$t/x/voidwatch" "$m"; then
+      cp -R "$d/backup/voidwatch" "$m"
+      update_done "$d" '{"ok":false,"error":"the swap failed"}'
+      return
+    fi
+    # the installed copy of this script updates itself too; the login item or the service starts it again
+    case "$0" in
+      "$HOME_DIR"/*)
+        if [ -f "$t/x/upload/upload.sh" ] && ! cmp -s "$t/x/upload/upload.sh" "$0" && sh -n "$t/x/upload/upload.sh"; then
+          cp "$t/x/upload/upload.sh" "$0.new" && chmod 755 "$0.new" && mv -f "$0.new" "$0" && : > "$HOME_DIR/.restart"
+        fi ;;
+    esac
+    update_done "$d" "{\"ok\":true,\"version\":\"$v\",\"from\":\"$old\",\"by\":\"$by\",\"at\":$(date +%s)}"
+  }
+  rollback_module() {
+    d=${1%/} m=$(module_of "$1")
+    by=$(sed -n 's/.*"by": *"\([^"]*\)".*/\1/p' "$d/rollback-request.json" | head -n 1)
+    [ -f "$d/backup/voidwatch/voidwatch.otmod" ] || { update_done "$d" '{"ok":false,"error":"there is no backup"}'; return; }
+    v=$(cat "$d/backup/version" 2>/dev/null)
+    rm -rf "$m"
+    cp -R "$d/backup/voidwatch" "$m" && rm -rf "$d/backup"
+    update_done "$d" "{\"ok\":true,\"version\":\"$v\",\"rollback\":true,\"by\":\"$by\",\"at\":$(date +%s)}"
+  }
   while :; do
+    check_latest
     if [ $# -gt 0 ]; then
       found=$1
     else
@@ -25,6 +90,7 @@ if [ "${1:-}" != --worker ]; then
       )
     fi
     printf '%s\n' "$found" | while IFS= read -r d; do
+      [ -d "$d" ] || continue
       for c in "${d%/}"/*/outbox; do
         [ -d "$c" ] || continue
         c=${c%/outbox}
@@ -33,7 +99,19 @@ if [ "${1:-}" != --worker ]; then
         sh "$0" --worker "$c" >/dev/null 2>&1 &
         echo $! > "$c/.pid"
       done
+      m=$(module_of "$d")
+      writable=false
+      [ -f "$m/voidwatch.otmod" ] && [ -w "$m" ] && [ -w "${m%/voidwatch}" ] && writable=true
+      write_file "${d%/}/latest.json" "{\"latest\":\"$latest\",\"updatable\":$writable,\"backup\":\"$(cat "${d%/}/backup/version" 2>/dev/null)\"}"
+      [ "$writable" = true ] && [ -f "${d%/}/update-request.json" ] && update_module "$d"
+      [ "$writable" = true ] && [ -f "${d%/}/rollback-request.json" ] && rollback_module "$d"
     done
+    if [ -f "$HOME_DIR/.restart" ]; then
+      # the new script takes over: the workers stop, and the login item or the service starts the new one
+      rm -f "$HOME_DIR/.restart"
+      pkill -f "$0 --worker" 2>/dev/null
+      exit 0
+    fi
     sleep 2
   done
 fi
@@ -197,7 +275,7 @@ while [ -d "$DIR" ]; do
   fi
 
   if [ "$status_every" -le 2 ]; then
-    sleep 1
+    sleep 0.5
   elif [ "$age" -gt 300 ]; then
     sleep 10 # the client is closed or logged out: no request stays open
   else

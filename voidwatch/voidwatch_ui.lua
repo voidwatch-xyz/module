@@ -64,6 +64,33 @@ local function stopButtons(parent)
   return w
 end
 
+-- the version line: Update, Reload or Roll back, whichever applies
+local function updateKey(u)
+  if not u then return '' end
+  return table.concat({ tostring(u.canUpdate), tostring(u.needsReload), tostring(u.canRollback), tostring(u.asked),
+    tostring(u.byHand), tostring(u.error), tostring(u.latest), tostring(u.files) }, ',')
+end
+
+local function updateRow(body, u)
+  if not u then return end
+  if u.asked then
+    make('VwSeparator', body)
+    make('VwText', body, 'Updating Voidwatch. The upload script downloads the new version.')
+    return
+  end
+  if not (u.needsReload or u.canUpdate or u.byHand or u.canRollback or u.error) then return end
+  make('VwSeparator', body)
+  if u.needsReload then
+    buttons(body, 'Reload to ' .. tostring(u.files), Voidwatch.reloadFiles)
+  elseif u.canUpdate then
+    buttons(body, 'Update to ' .. tostring(u.latest), Voidwatch.update)
+  elseif u.byHand then
+    make('VwText', body, 'Version ' .. tostring(u.latest) .. ' is out. Update it by hand from voidwatch.xyz.')
+  end
+  if u.canRollback then buttons(body, 'Roll back to ' .. tostring(u.backup), Voidwatch.rollback) end
+  if u.error then make('VwText', body, 'The update failed: ' .. short(u.error, 60)) end
+end
+
 -- the parts that only change when the state does are built once; the numbers are filled in every second
 local function build(v)
   local body = win.body
@@ -77,6 +104,24 @@ local function build(v)
     refs.memory = line(body, 'Memory')
     refs.errors = line(body, 'Errors')
     stopButtons(body)
+    local reset = buttons(body, 'Reset loot and time')
+    reset.a.onClick = function()
+      -- a second click within 3 s confirms: the counters of this session are gone after it
+      if refs.resetAsked and g_clock.millis() - refs.resetAsked < 3000 then
+        refs.resetAsked = nil
+        reset.a:setText('Reset loot and time')
+        pcall(Voidwatch.resetLoot)
+      else
+        refs.resetAsked = g_clock.millis()
+        reset.a:setText('Click again to reset')
+        scheduleEvent(function()
+          if not reset.a:isDestroyed() and refs and refs.resetAsked then
+            refs.resetAsked = nil
+            reset.a:setText('Reset loot and time')
+          end
+        end, 3000)
+      end
+    end
     make('VwSeparator', body)
     make('VwHead', body, 'Data sources')
     for i in ipairs(v.sources) do refs.sources[i] = make('VwSource', body) end
@@ -129,6 +174,7 @@ local function build(v)
   else
     make('VwText', body, 'Log in to see this client.')
   end
+  updateRow(body, v.update)
   for _, w in ipairs(body:getChildren()) do w:setWidth(body:getWidth()) end
 end
 
@@ -204,7 +250,7 @@ local function refresh()
   if not win then return end
   local ok, v = pcall(Voidwatch.view)
   if ok and type(v) == 'table' then
-    local now = v.state .. '|' .. #v.sources
+    local now = v.state .. '|' .. #v.sources .. '|' .. updateKey(v.update)
     if now ~= shape then
       shape = now
       build(v)
@@ -278,6 +324,11 @@ Voidwatch.ui = {
     dot:setPhantom(true)
     lastState = nil
     changed()
+    local ok, again = pcall(g_settings.getBoolean, 'voidwatch-reopen')
+    if ok and again then
+      pcall(g_settings.remove, 'voidwatch-reopen')
+      open()
+    end
   end,
   terminate = function()
     close()
@@ -287,4 +338,5 @@ Voidwatch.ui = {
   changed = changed,
   close = close,
   toggle = toggle,
+  isOpen = function() return win ~= nil end,
 }

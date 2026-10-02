@@ -24,13 +24,17 @@ Every release has a `SHA256SUMS` file. Compare it with the hash of your zip:
 shasum -a 256 voidwatch-module.zip
 ```
 
+## Update
+
+From module 0.6.0, the Voidwatch window in the game shows **Update to X.Y.Z** when a newer release is out. The upload script downloads the zip and `SHA256SUMS` from the releases of this repo, checks the hash and keeps the old module as a backup. **Roll back** puts the backup back. The script never takes code from the website.
+
 ## Adapt the module to a server
 
 Server-specific data (routes, supplies, tasks) comes from adapters. See [adding a server](https://voidwatch.xyz/developers/new-server).
 
 ## Release
 
-Push a tag like `v0.5.2`. The release workflow packs the zip and the checksum file and publishes the release.
+Push a tag like `v0.6.0`. The release workflow packs the zip and the checksum file and publishes the release. Every client with module 0.6.0 or newer then offers it as an update.
 
 ## Licence
 
