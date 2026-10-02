@@ -20,7 +20,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.5.3'
+local MODULE = 'voidwatch-feed/0.6.0'
 local ROOT = '/voidwatch'
 local LOOP_MS = 1000                                    -- how often the module looks at the reply; writing a file is cheap
 local SERVER = ''                                       -- set it, or let an adapter return the server field
@@ -621,9 +621,12 @@ local function step()
   if COMMANDS and paired then runCommands() end
 end
 
+local checkUpdates   -- below, with the window's actions
+
 local function tick()
   loopEvent = nil
   if not alive or halted then return end
+  pcall(checkUpdates)
   loops = loops + 1
   if loops % GUARD_EVERY == 0 then
     guard()
@@ -769,7 +772,73 @@ local function stateOf()
 end
 Voidwatch.state = stateOf
 
+-- updates: the upload script fetches a release from GitHub and swaps the folder; the module only reads its notes and
+-- writes requests, so the game client still makes no web request
+local RUNNING = MODULE:match('/(.+)$') or MODULE
+local upd = { at = -math.huge }
+local function vnum(v)
+  local a, b, c = tostring(v or ''):match('^(%d+)%.(%d+)%.(%d+)')
+  return a and (tonumber(a) * 1000000 + tonumber(b) * 1000 + tonumber(c)) or 0
+end
+local function who() return g_game.isOnline() and g_game.getCharacterName() or '' end
+local function filesVersion()
+  for _, path in ipairs({ '/modules/voidwatch/voidwatch.otmod', '/mods/voidwatch/voidwatch.otmod' }) do
+    local text = read(path)
+    if text then return text:match('version:%s*([%d%.]+)') end
+  end
+end
+local function reloadSelf()
+  if Voidwatch.ui and Voidwatch.ui.isOpen and Voidwatch.ui.isOpen() then pcall(g_settings.set, 'voidwatch-reopen', true) end
+  -- on the next frame, outside the module's own call stack
+  addEvent(function()
+    pcall(g_modules.discoverModules)
+    local m = g_modules.getModule('voidwatch')
+    if m then pcall(function() m:reload() end) end
+  end)
+end
+function checkUpdates(force)
+  if not force and g_clock.millis() - upd.at < 10000 then return end
+  upd.at = g_clock.millis()
+  local l = readJson(ROOT .. '/latest.json') or {}
+  upd.latest = l.latest ~= '' and l.latest or nil
+  upd.updatable = l.updatable == true
+  upd.backup = l.backup ~= '' and l.backup or nil
+  upd.files = filesVersion()
+  upd.asked = g_resources.fileExists(ROOT .. '/update-request.json') or g_resources.fileExists(ROOT .. '/rollback-request.json')
+  upd.result = readJson(ROOT .. '/update-result.json')
+  -- the client that asked reloads once the files hold another version; the others offer Reload
+  local r = upd.result
+  if r and r.ok and upd.files and upd.files ~= RUNNING and r.by == who() and not upd.reloading then
+    upd.reloading = true
+    say(('the files are version %s now, reloading.'):format(upd.files))
+    reloadSelf()
+  end
+end
+
+function Voidwatch.update()
+  checkUpdates(true)
+  if not upd.latest or not upd.updatable or vnum(upd.latest) <= vnum(RUNNING) then return false end
+  pcall(g_resources.deleteFile, ROOT .. '/update-result.json')
+  write(ROOT .. '/update-request.json', json.encode({ version = upd.latest, by = who() }))
+  upd.asked = true
+  changed()
+  return true
+end
+
+function Voidwatch.rollback()
+  checkUpdates(true)
+  if not upd.backup or not upd.updatable then return false end
+  pcall(g_resources.deleteFile, ROOT .. '/update-result.json')
+  write(ROOT .. '/rollback-request.json', json.encode({ by = who() }))
+  upd.asked = true
+  changed()
+  return true
+end
+
+function Voidwatch.reloadFiles() reloadSelf() end
+
 function Voidwatch.view()
+  checkUpdates()
   local now = g_clock.millis()
   local p = g_game.isOnline() and g_game.getLocalPlayer() or nil
   for _, id in ipairs(order) do
@@ -787,6 +856,14 @@ function Voidwatch.view()
     suppliesSource = me.last and me.last.suppliesSource or nil, commands = COMMANDS,
     heapMB = math.floor(collectgarbage('count') / 1024), clientMB = okMem and type(bytes) == 'number' and mb(bytes) or nil,
     errors = errors, lastError = lastError, sources = sources(), dir = g_resources.getWriteDir() .. 'voidwatch',
+    update = {
+      running = RUNNING, latest = upd.latest, files = upd.files, backup = upd.backup, asked = upd.asked,
+      canUpdate = upd.updatable and vnum(upd.latest) > vnum(RUNNING) and not upd.asked,
+      byHand = not upd.updatable and vnum(upd.latest) > vnum(RUNNING),
+      needsReload = vnum(upd.files) > 0 and upd.files ~= RUNNING and not upd.asked,
+      canRollback = upd.updatable and upd.backup ~= nil and upd.backup ~= RUNNING and not upd.asked,
+      error = upd.result and upd.result.ok == false and tostring(upd.result.error) or nil,
+    },
   }
 end
 
