@@ -3,10 +3,10 @@ Module
   description: Writes the character state for the Voidwatch upload script and runs the commands it brings back
   author: Voidwatch
   website: https://voidwatch.xyz/developers
-  version: 0.3.0
+  version: 0.5.1
   sandboxed: true
   autoload: true
   autoload-priority: 1000
-  scripts: [ voidwatch ]
+  scripts: [ voidwatch, orion, orion_autoloot, orion_tasks, voidwatch_ui ]
   @onLoad: Voidwatch.init()
   @onUnload: Voidwatch.terminate()

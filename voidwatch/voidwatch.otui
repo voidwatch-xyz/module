@@ -1,0 +1,156 @@
+VwWho < Label
+  color: #ffffff
+  font: verdana-11px-rounded
+  text-auto-resize: true
+
+VwHead < Label
+  color: #ffdd55
+  font: verdana-11px-rounded
+  text-auto-resize: true
+  margin-top: 2
+
+VwText < Label
+  color: #9b9b9b
+  text-wrap: true
+  text-auto-resize: true
+
+VwDot < UIWidget
+  size: 7 7
+  border-width: 1
+  border-color: #000000
+  phantom: true
+
+VwState < Panel
+  height: 16
+
+  VwDot
+    id: dot
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+
+  Label
+    id: text
+    anchors.left: dot.right
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 5
+    text-auto-resize: true
+
+VwLine < Panel
+  height: 15
+
+  Label
+    id: key
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    color: #9b9b9b
+    text-auto-resize: true
+
+  Label
+    id: value
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    color: #dfdfdf
+    text-auto-resize: true
+
+VwSource < Panel
+  height: 30
+
+  VwDot
+    id: dot
+    anchors.left: parent.left
+    anchors.top: parent.top
+    margin-top: 4
+
+  Label
+    id: name
+    anchors.left: dot.right
+    anchors.top: parent.top
+    margin-left: 6
+    color: #ffffff
+    text-auto-resize: true
+
+  Label
+    id: gives
+    anchors.left: name.left
+    anchors.top: name.bottom
+    anchors.right: parent.right
+    color: #9b9b9b
+    text-wrap: true
+    text-auto-resize: true
+
+VwButtons < Panel
+  height: 22
+
+  Button
+    id: a
+    anchors.left: parent.left
+    anchors.right: parent.horizontalCenter
+    anchors.verticalCenter: parent.verticalCenter
+    margin-right: 2
+    height: 20
+
+  Button
+    id: b
+    anchors.left: parent.horizontalCenter
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 2
+    height: 20
+
+VwCode < Label
+  height: 34
+  font: sans-bold-16px
+  color: #ffffff
+  text-align: center
+  background-color: #1c1c1c
+  border-width: 1
+  border-color: #4a4a4a
+
+VwSeparator < HorizontalSeparator
+  margin-top: 4
+  margin-bottom: 2
+
+VoidwatchWindow < MainWindow
+  id: voidwatchWindow
+  !text: tr('Voidwatch')
+  size: 330 200
+
+  Panel
+    id: body
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    layout:
+      type: verticalBox
+      spacing: 3
+      fit-children: true
+
+  HorizontalSeparator
+    id: footSep
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: closeButton.top
+    margin-bottom: 6
+
+  Label
+    id: version
+    anchors.left: parent.left
+    anchors.verticalCenter: closeButton.verticalCenter
+    color: #777777
+    text-auto-resize: true
+
+  Button
+    id: closeButton
+    !text: tr('Close')
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    size: 80 20
+
+  Button
+    id: dashboardButton
+    !text: tr('Dashboard')
+    anchors.right: closeButton.left
+    anchors.bottom: parent.bottom
+    margin-right: 5
+    size: 84 20
