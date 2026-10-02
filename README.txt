@@ -10,7 +10,8 @@ Voidwatch module and upload scripts                                          MIT
    It runs in the background and starts at every login from then on. A client that runs through Wine or
    CrossOver uses the macOS or Linux setup.
 4. Start the client and log in. A game message shows a code and a link. Open the link to try the
-   dashboard as a guest, or type the code in Settings, Clients on the website.
+   dashboard as a guest, or type the code in Settings, Clients on the website. The Voidwatch button in
+   the top bar opens a window with the same code, and later with what the module sends.
 
 If the game message says the setup did not find the client, drop the folder it shows onto the setup file
 (Windows) or drag it into the setup window (macOS), or run: sh setup-linux.sh "<folder>".
