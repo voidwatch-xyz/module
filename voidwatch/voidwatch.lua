@@ -20,7 +20,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.5.2'
+local MODULE = 'voidwatch-feed/0.5.3'
 local ROOT = '/voidwatch'
 local LOOP_MS = 1000                                    -- how often the module looks at the reply; writing a file is cheap
 local SERVER = ''                                       -- set it, or let an adapter return the server field
