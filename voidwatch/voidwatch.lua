@@ -15,12 +15,12 @@
 -- A file named "off" in <write dir>/voidwatch stops the module in every client. In the console,
 -- modules.voidwatch.Voidwatch.stop() stops this one and modules.voidwatch.Voidwatch.status() shows what it does;
 -- modules.voidwatch.Voidwatch.installBot() and .removeBot() add or remove the bot adapter in the selected bot config,
--- and modules.voidwatch.Voidwatch.resetLoot() starts the loot counters over. After an update that adds a file,
+-- and modules.voidwatch.Voidwatch.resetLoot() starts the loot, supply and time counters over. After an update that adds a file,
 -- run g_modules.discoverModules() before the reload: a reload keeps the file list the client read at its start.
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.6.0'
+local MODULE = 'voidwatch-feed/0.6.1'
 local ROOT = '/voidwatch'
 local LOOP_MS = 1000                                    -- how often the module looks at the reply; writing a file is cheap
 local SERVER = ''                                       -- set it, or let an adapter return the server field
@@ -725,8 +725,10 @@ end
 function Voidwatch.resetLoot()
   if not ledger then return say('log in first.') end
   ledger, ledgerDirty, lastLeft = newLedger(), true, {}
+  carried, carriedDirty = {}, false
+  write(me.dir .. '/carried.json', '{}')
   flushLedger(true)
-  say('loot and supply counters reset.')
+  say('loot, supply and time counters reset.')
 end
 
 function Voidwatch.stop()

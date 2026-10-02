@@ -19,7 +19,8 @@ script downloads the release from GitHub, checks it, keeps the old module as a b
 reloads. "Roll back" puts the backup back. From module 0.5.x, update once by hand: steps 1 and 2, then
 run the setup again.
 
-Reset: "Reset loot and time" in the same window starts the loot, supplies and time from zero.
+Reset: "Reset loot, supplies and time" in the same window starts the loot, the supplies and the time
+from zero.
 
 Verified on Orion-OTS. Most other servers lock their client against modules.
 

@@ -104,20 +104,20 @@ local function build(v)
     refs.memory = line(body, 'Memory')
     refs.errors = line(body, 'Errors')
     stopButtons(body)
-    local reset = buttons(body, 'Reset loot and time')
-    reset.a.onClick = function()
+    local resetButton = buttons(body, 'Reset loot, supplies and time').a
+    resetButton.onClick = function()
       -- a second click within 3 s confirms: the counters of this session are gone after it
       if refs.resetAsked and g_clock.millis() - refs.resetAsked < 3000 then
         refs.resetAsked = nil
-        reset.a:setText('Reset loot and time')
+        resetButton:setText('Reset loot, supplies and time')
         pcall(Voidwatch.resetLoot)
       else
         refs.resetAsked = g_clock.millis()
-        reset.a:setText('Click again to reset')
+        resetButton:setText('Click again to reset')
         scheduleEvent(function()
-          if not reset.a:isDestroyed() and refs and refs.resetAsked then
+          if not resetButton:isDestroyed() and refs and refs.resetAsked then
             refs.resetAsked = nil
-            reset.a:setText('Reset loot and time')
+            resetButton:setText('Reset loot, supplies and time')
           end
         end, 3000)
       end
