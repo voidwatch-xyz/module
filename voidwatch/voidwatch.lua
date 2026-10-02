@@ -20,7 +20,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.5.1'
+local MODULE = 'voidwatch-feed/0.5.2'
 local ROOT = '/voidwatch'
 local LOOP_MS = 1000                                    -- how often the module looks at the reply; writing a file is cheap
 local SERVER = ''                                       -- set it, or let an adapter return the server field
@@ -125,6 +125,14 @@ local function addLoot(source, name, count)
   end
   items[name] = (items[name] or 0) + count
   ledgerDirty = true
+end
+
+local function dropLoot(source, name)
+  local items = ledger and ledger.sources[source]
+  if items and type(name) == 'string' and items[name] then
+    items[name] = nil
+    ledgerDirty = true
+  end
 end
 
 local function newLedger() return { since = os.time(), onlineS = 0, sources = {}, used = {} } end
@@ -290,7 +298,8 @@ local function startAdapters()
       rec.running = true
       local id = rec.def.id
       if rec.def.init then
-        call(rec, 'init', rec.def.init, { log = log, say = say, addLoot = function(name, n) addLoot(id, name, n) end })
+        call(rec, 'init', rec.def.init, { log = log, say = say, addLoot = function(name, n) addLoot(id, name, n) end,
+                                         dropLoot = function(name) dropLoot(id, name) end })
       end
     elseif not want and rec.running then
       if rec.def.terminate then pcall(rec.def.terminate) end

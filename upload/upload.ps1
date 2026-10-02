@@ -29,7 +29,7 @@ if (-not $Worker) {
         }
       }
     }
-    Start-Sleep -Seconds 30
+    Start-Sleep -Seconds 2
   }
 }
 

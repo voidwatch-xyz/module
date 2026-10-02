@@ -4,10 +4,6 @@
 set -eu
 DEST="${XDG_DATA_HOME:-$HOME/.local/share}/voidwatch"
 UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/voidwatch.service"
-# the upload script ran as "emberwatch" before the rename; stop that one too
-systemctl --user disable --now emberwatch.service 2>/dev/null || true
-rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/emberwatch.service"
-rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/emberwatch"
 mkdir -p "$DEST" "$(dirname "$UNIT")"
 cp "$(dirname "$0")/upload/upload.sh" "$DEST/upload.sh"
 [ $# -gt 0 ] && printf '%s\n' "$1" >> "$DEST/folders.txt"
