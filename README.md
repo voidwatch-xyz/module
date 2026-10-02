@@ -2,11 +2,14 @@
 
 The game module and the upload scripts for [Voidwatch](https://voidwatch.xyz), a dashboard for players who run many OTClientV8 clients.
 
-- `voidwatch/`: the OTClientV8 module. It makes no web requests. It writes the character state into files and reads commands from files.
-- `upload/`: the upload script for Windows (`upload.ps1`) and for macOS and Linux (`upload.sh`). It sends the files to the website and brings back the replies.
+- `voidwatch/`: the OTClientV8 module. It makes no web requests. It writes the character state into files; commands from files come later. A button in the client's top bar opens a window that shows what it sends.
+- `voidwatch/bot/` and the `orion*.lua` adapters: what the stock cavebot, vBot and Orion-OTS add, such as routes, tasks, loot, blessings and death redemption.
+- `upload/`: the upload script for Windows (`upload.ps1`) and for macOS and Linux (`upload.sh`), also for clients in Wine or CrossOver. It sends the files to the website and brings back the replies.
 - `setup-*` and `remove-*`: they install the upload script to start at every login, or remove it.
 
 **The upload script is required.** The game client sends nothing itself, so without the script nothing reaches the website.
+
+Verified on Orion-OTS. Most other servers lock their client against modules.
 
 ## Install
 
@@ -27,7 +30,7 @@ Server-specific data (routes, supplies, tasks) comes from adapters. See [adding 
 
 ## Release
 
-Push a tag like `v0.3.0`. The release workflow packs the zip and the checksum file and publishes the release.
+Push a tag like `v0.5.2`. The release workflow packs the zip and the checksum file and publishes the release.
 
 ## Licence
 

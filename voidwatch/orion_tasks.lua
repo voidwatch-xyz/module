@@ -4,8 +4,9 @@
 -- packet dispatcher, not the tasks module's own callback, so it cannot clash with a bot that taps that one. It
 -- passes every packet on first and only reads.
 -- Death redemption is an item of the task shop's "consum" page. The page arrives only when asked for, so the
--- adapter asks: every minute while redemption is off or unknown, every 10 minutes while it is on. The shop
--- window stays closed.
+-- adapter asks: every minute while redemption is off or unknown, every 10 minutes while it is on. The task points
+-- come only with a claim or with the tasks window, so the adapter asks once per character, with the "open" request
+-- that the window sends. Neither window opens.
 local original, wrapper
 local owner                                             -- the character the data below belongs to
 local catalog, goals, active, fromTracker, known = {}, {}, {}, false, false
@@ -77,8 +78,12 @@ local function send(action, data)
 end
 
 -- checked every minute, so a redemption that turns off is asked about again within a minute
-local askedAt
+local askedAt, openedFor
 local function tick()
+  if g_game.isOnline() and openedFor ~= me() then
+    openedFor = me()
+    pcall(send, 'open', {})
+  end
   local wait = (owner == me() and dr and dr.active) and ASK_ON_MS or ASK_OFF_MS
   if g_game.isOnline() and (not askedAt or g_clock.millis() - askedAt >= wait) then
     askedAt = g_clock.millis()
@@ -129,7 +134,7 @@ local function untap()
 end
 
 Voidwatch.register({
-  id = 'orion-ots-tasks', name = 'Orion tasks', version = '2',
+  id = 'orion-ots-tasks', name = 'Orion tasks', version = '3',
   match = { hosts = { 'orion-ots.pl' } },
   provides = { 'tasks', 'taskPoints', 'taskWeek', 'redemption', 'redemptionLeft' },
   fields = {

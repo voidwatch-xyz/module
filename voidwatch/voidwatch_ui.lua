@@ -85,15 +85,29 @@ local function build(v)
     refs.captures = line(body, 'Screenshots')
     refs.supplies = line(body, 'Supplies')
     refs.commands = line(body, 'Commands')
-    make('VwText', body, 'Change these in Settings > Clients on voidwatch.xyz.')
+    make('VwText', body, 'Change these on the Clients page on voidwatch.xyz.')
   elseif v.state == 'pairing' then
     refs.code = make('VwCode', body)
     refs.expires = line(body, 'Code expires')
-    local copied = function(what, text)
+    local row
+    local copied = function(what, text, key, label)
       g_window.setClipboardText(text or '')
       refs.copied, refs.copiedAt = what, g_clock.millis()
+      local b = row and row[key]
+      if b then
+        local colour = b:getColor()
+        b:setText('Copied')
+        b:setColor('#4cd964')
+        scheduleEvent(function()
+          if not b:isDestroyed() then
+            b:setText(label)
+            b:setColor(colour)
+          end
+        end, 2000)
+      end
     end
-    buttons(body, 'Copy code', function() copied('Code copied.', v.code) end, 'Copy link', function() copied('Link copied.', v.url) end)
+    row = buttons(body, 'Copy code', function() copied('Code copied.', v.code, 'a', 'Copy code') end,
+      'Copy link', function() copied('Link copied.', v.url, 'b', 'Copy link') end)
     buttons(body, 'Open the link', function() if v.url then g_platform.openUrl(v.url) end end)
     refs.howto = make('VwText', body)
     make('VwSeparator', body)

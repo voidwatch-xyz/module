@@ -34,7 +34,7 @@ if [ "${1:-}" != --worker ]; then
         echo $! > "$c/.pid"
       done
     done
-    sleep 30
+    sleep 2
   done
 fi
 
