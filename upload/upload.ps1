@@ -16,8 +16,11 @@ if (-not $Worker) {
     if ($m) { $m.Matches[0].Groups[1].Value } else { '' }
   }
   function Write-Text($path, $text) { [IO.File]::WriteAllText("$path.tmp", $text); Move-Item -Force "$path.tmp" $path }
-  # the module folder the client loads, next to the voidwatch folder in its write folder
-  function Module-Of($d) { Join-Path (Split-Path $d) 'modules\voidwatch' }
+  # the module folder the client loads: beside the data folder in bot\_voidwatch, or the write folder's modules folder
+  function Module-Of($d) {
+    if ($d -match '[\\/]_voidwatch[\\/]data[\\/]?$') { return Join-Path (Split-Path $d) 'voidwatch' }
+    Join-Path (Split-Path $d) 'modules\voidwatch'
+  }
   function Can-Write($m) {
     if (-not (Test-Path (Join-Path $m 'voidwatch.otmod'))) { return $false }
     try { [IO.File]::WriteAllText((Join-Path $m '.w'), ''); Remove-Item -Force (Join-Path $m '.w'); return $true } catch { return $false }
@@ -81,7 +84,7 @@ if (-not $Worker) {
       $found = @($Dir)
     } else {
       $found = @(Get-ChildItem (Join-Path $env:APPDATA 'OTClientV8') -Directory -ErrorAction SilentlyContinue |
-        ForEach-Object { Join-Path $_.FullName 'voidwatch' } | Where-Object { Test-Path $_ })
+        ForEach-Object { (Join-Path $_.FullName 'voidwatch'), (Join-Path $_.FullName 'bot\_voidwatch\data') } | Where-Object { Test-Path $_ })
       $list = Join-Path $Home_ 'folders.txt'
       if (Test-Path $list) { $found += Get-Content $list | Where-Object { $_ -and (Test-Path $_) } }
     }
@@ -112,6 +115,8 @@ $Api = if ($env:VOIDWATCH_API) { $env:VOIDWATCH_API } else { 'https://voidwatch.
 $Dir = $Dir.TrimEnd('\', '/')
 $Out = Join-Path $Dir 'outbox'; $In = Join-Path $Dir 'inbox'; $TokenFile = Join-Path $Dir '.token'
 $Parent = Split-Path $Dir; $SentMap = Join-Path $Parent '.minimap-sent'
+# the client's write folder: two levels up from a character folder, four from one in bot\_voidwatch\data
+$WriteDir = if ($Parent -match '[\\/]_voidwatch[\\/]data$') { Split-Path (Split-Path (Split-Path $Parent)) } else { Split-Path $Parent }
 New-Item -ItemType Directory -Force -Path $In | Out-Null
 $lastSent = $null; $lastCapture = $null; $minimapCheck = [datetime]::MinValue
 $statusEvery = 30; $minimapOn = $true; $refused = 0; $wake = $false; $said = ''
@@ -213,7 +218,7 @@ while (Test-Path $Dir) {
         $minimapOn = $r.body -notmatch '"minimap":false'
         if ((Field $r.body 'commands') -ne '0') {
           $c = Call 'Get' '/commands' $null $null 10
-          if ($c.code -eq 200) { Put "$In\commands.json" $c.body }
+          if ($c.code -eq 200) { $fetched++; Put "$In\commands-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())-$fetched.json" $c.body }
         }
         Note 'sending'
       } elseif (Revoked $r) {
@@ -238,15 +243,16 @@ while (Test-Path $Dir) {
       if ((Call 'Post' '/capture' $shot.FullName 'image/png' 20).code -eq 200) { $lastCapture = $shot.LastWriteTime }
     }
 
-    if (Test-Path "$Out\results.json") {
-      foreach ($res in (Get-Content "$Out\results.json" -Raw | ConvertFrom-Json)) {
+    if ((Test-Path "$Out\results.json") -and -not (Test-Path "$Out\.results")) { Move-Item -Force "$Out\results.json" "$Out\.results" }
+    if (Test-Path "$Out\.results") {
+      foreach ($res in (Get-Content "$Out\.results" -Raw | ConvertFrom-Json)) {
         Put "$Out\.result" (@{ ok = $res.ok; message = $res.message } | ConvertTo-Json -Compress)
         Call 'Post' "/commands/$($res.id)/result" "$Out\.result" 'application/json' 10 | Out-Null
       }
-      Remove-Item -Force -ErrorAction SilentlyContinue "$Out\results.json", "$Out\.result"
+      Remove-Item -Force -ErrorAction SilentlyContinue "$Out\.results", "$Out\.result"
     }
 
-    # the client's own minimap sits in the write folder, two levels up. The clients there share it, so only the first
+    # the client's own minimap sits in the write folder. The clients there share it, so only the first
     # paired character sends it, and only after it changed.
     if ($minimapOn -and ($now - $minimapCheck).TotalSeconds -ge 60) {
       $minimapCheck = $now
@@ -254,7 +260,7 @@ while (Test-Path $Dir) {
         Where-Object { "$(Get-Content (Join-Path $_.FullName 'inbox\pair.json') -Raw -ErrorAction SilentlyContinue)" -match '"paired":true' } |
         Sort-Object Name | Select-Object -First 1
       if ($first -and $first.FullName -eq (Get-Item $Dir).FullName) {
-        $map = Get-ChildItem (Split-Path $Parent) -Filter 'minimap*.otmm' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
+        $map = Get-ChildItem $WriteDir -Filter 'minimap*.otmm' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
           Select-Object -First 1
         $stamp = if ($map) { [string]$map.LastWriteTimeUtc.Ticks } else { '' }
         if ($map -and $stamp -ne "$(Get-Content $SentMap -Raw -ErrorAction SilentlyContinue)") {

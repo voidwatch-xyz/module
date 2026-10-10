@@ -24,8 +24,13 @@ if [ "${1:-}" != --worker ]; then
     tag=$(curl -sS -m 20 "$LATEST_API" 2>/dev/null | sed -n 's/.*"tag_name": *"v\([0-9.]*\)".*/\1/p' | head -n 1)
     [ -n "$tag" ] && latest=$tag
   }
-  # the module folder the client loads, next to the voidwatch folder in its write folder
-  module_of() { printf '%s' "${1%/}/../modules/voidwatch"; }
+  # the module folder the client loads: beside the data folder in bot/_voidwatch, or the write folder's modules folder
+  module_of() {
+    case "${1%/}" in
+      */_voidwatch/data) printf '%s' "${1%/}/../voidwatch" ;;
+      *) printf '%s' "${1%/}/../modules/voidwatch" ;;
+    esac
+  }
   update_done() { write_file "$1/update-result.json" "$2"; rm -f "$1/update-request.json" "$1/rollback-request.json"; rm -rf "$1/.update"; }
   # an update the window asked for: the release zip, checked against its SHA256SUMS; the old folder stays as a backup
   update_module() {
@@ -88,7 +93,11 @@ if [ "${1:-}" != --worker ]; then
         for d in "$HOME/Library/Application Support/OTClientV8"/*/voidwatch "$HOME/.otclientv8"/*/voidwatch \
                  "$HOME/.local/share/otclientv8"/*/voidwatch \
                  "$HOME/Library/Application Support/CrossOver/Bottles"/*/drive_c/users/*/AppData/Roaming/OTClientV8/*/voidwatch \
-                 "$HOME/.wine/drive_c/users"/*/AppData/Roaming/OTClientV8/*/voidwatch; do
+                 "$HOME/.wine/drive_c/users"/*/AppData/Roaming/OTClientV8/*/voidwatch \
+                 "$HOME/Library/Application Support/OTClientV8"/*/bot/_voidwatch/data "$HOME/.otclientv8"/*/bot/_voidwatch/data \
+                 "$HOME/.local/share/otclientv8"/*/bot/_voidwatch/data \
+                 "$HOME/Library/Application Support/CrossOver/Bottles"/*/drive_c/users/*/AppData/Roaming/OTClientV8/*/bot/_voidwatch/data \
+                 "$HOME/.wine/drive_c/users"/*/AppData/Roaming/OTClientV8/*/bot/_voidwatch/data; do
           [ -d "$d" ] && printf '%s\n' "$d"
         done
         [ -f "$HOME_DIR/folders.txt" ] && cat "$HOME_DIR/folders.txt"
@@ -124,8 +133,13 @@ fi
 DIR=${2%/}
 OUT="$DIR/outbox" IN="$DIR/inbox" TOKEN_FILE="$DIR/.token" AUTH="$DIR/.auth" BODY="$DIR/.body"
 SENT_MAP="$DIR/../.minimap-sent"
+# the client's write folder: two levels up from a character folder, four from one in bot/_voidwatch/data
+case "$DIR" in
+  */_voidwatch/data/*) WRITE_DIR="$DIR/../../../.." ;;
+  *) WRITE_DIR="$DIR/../.." ;;
+esac
 mkdir -p "$IN"
-last_sent=0 minimap_check=0 status_every=30 refused=0 minimap_on=1 wake=0 said=""
+last_sent=0 minimap_check=0 status_every=30 refused=0 minimap_on=1 wake=0 said="" fetched=0
 # a game client that runs through Wine reports Windows: the website takes the system from here
 case $(uname -s 2>/dev/null) in
   Darwin) host_os=macOS ;;
@@ -214,7 +228,8 @@ while [ -d "$DIR" ]; do
           status_every=${status_every:-30}
           case $(cat "$IN/reply.json") in *'"minimap":false'*) minimap_on=0 ;; *) minimap_on=1 ;; esac
           if [ "$(field "$IN/reply.json" commands)" != 0 ] && [ "$(request GET /commands -m 10)" = 200 ]; then
-            mv -f "$BODY" "$IN/commands.json"
+            fetched=$((fetched + 1))
+            mv -f "$BODY" "$IN/commands-$(date +%s)-$fetched.json"
           fi
           note "sending"
           ;;
@@ -247,18 +262,19 @@ while [ -d "$DIR" ]; do
     fi
   fi
 
-  if [ -f "$OUT/results.json" ]; then
+  [ -f "$OUT/results.json" ] && [ ! -f "$OUT/.results" ] && mv -f "$OUT/results.json" "$OUT/.results"
+  if [ -f "$OUT/.results" ]; then
     # one result per command: {"id":1,"ok":true,"message":"..."}
     sed 's/},{/}\
-{/g; s/^\[//; s/\]$//' "$OUT/results.json" | while IFS= read -r r; do
+{/g; s/^\[//; s/\]$//' "$OUT/.results" | while IFS= read -r r || [ -n "$r" ]; do
       id=$(printf '%s' "$r" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
       [ -n "$id" ] && printf '%s' "$r" > "$OUT/.result" \
         && request POST "/commands/$id/result" -m 10 -H "Content-Type: application/json" --data-binary "@$OUT/.result" >/dev/null
     done
-    rm -f "$OUT/results.json" "$OUT/.result"
+    rm -f "$OUT/.results" "$OUT/.result"
   fi
 
-  # the client's own minimap sits in the write folder, two levels up. The clients there share it, so only the first
+  # the client's own minimap sits in the write folder. The clients there share it, so only the first
   # paired character sends it, and only after it changed.
   if [ "$minimap_on" = 1 ] && [ $((now - minimap_check)) -ge 60 ]; then
     minimap_check=$now
@@ -266,7 +282,7 @@ while [ -d "$DIR" ]; do
     for t in "$DIR"/../*/inbox/pair.json; do grep -q '"paired":true' "$t" 2>/dev/null && { first=$t; break; }; done
     if [ "$first" = "$DIR/../${DIR##*/}/inbox/pair.json" ]; then
       map="" best=0
-      for f in "$DIR"/../../minimap*.otmm; do
+      for f in "$WRITE_DIR"/minimap*.otmm; do
         [ -f "$f" ] || continue
         mm=$(mtime "$f")
         [ "$mm" -gt "$best" ] && map=$f best=$mm

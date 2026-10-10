@@ -1,8 +1,8 @@
 -- Voidwatch bot adapter, MIT licence. The Voidwatch module copies it into the bot's config folder when the player
--- turns it on; the bot loads every .lua file there. It hands the bot's state to the module every 10 s and changes
--- nothing in the bot. It works with the stock cavebot, vBot and presets built on them: each value is read only where
--- its function exists, and a missing one stays out of the status.
-local VERSION = '1'
+-- turns it on; the bot loads every .lua file there. It hands the bot's state to the module every 10 s, and it changes
+-- the bot only through the commands below. It works with the stock cavebot, vBot and presets built on them: each value
+-- is read only where its function exists, and a missing one stays out of the status.
+local VERSION = '2'
 
 local config = (function()
   local ok, name = pcall(function() return modules.game_bot.contentsPanel.config:getCurrentOption().text end)
@@ -84,8 +84,45 @@ local function onOff(t)
   return nil
 end
 
+local function switch(t, name, on)
+  if type(on) ~= 'boolean' then return false, 'on must be true or false' end
+  local set = fn(t, on and 'setOn' or 'setOff')
+  if not set then return false, name .. ' is not loaded' end
+  set()
+  return true, name .. (on and ' on' or ' off')
+end
+
+local function nearestGoto(list, me)
+  local best, bestDist, bestIndex
+  for index, child in ipairs(list:getChildren()) do
+    if child.action == 'goto' then
+      local x, y, z = tostring(child.value):match('^%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)')
+      x, y, z = tonumber(x), tonumber(y), tonumber(z)
+      if z == me.z then
+        local d = math.max(math.abs(x - me.x), math.abs(y - me.y))
+        if not bestDist or d < bestDist then best, bestDist, bestIndex = child, d, index end
+      end
+    end
+  end
+  return best, bestDist, bestIndex
+end
+
+local function resetHere()
+  local list = type(CaveBot) == 'table' and CaveBot.actionList
+  if not list then return false, 'the cavebot is not loaded' end
+  local best, dist, index = nearestGoto(list, g_game.getLocalPlayer():getPosition())
+  if not best then return false, 'no waypoint on this floor' end
+  list:focusChild(best)
+  return true, ('waypoint %d, %d sqm away'):format(index, dist)
+end
+
 local adapter = {
   id = 'bot', version = VERSION,
+  actions = {
+    toggle_cavebot = function(args) return switch(CaveBot, 'cavebot', args.on) end,
+    toggle_targetbot = function(args) return switch(TargetBot, 'targeting', args.on) end,
+    reset_here = resetHere,
+  },
   fields = {
     botConfig = function() return config end,
     routeOn = function() return onOff(CaveBot) end,
