@@ -3,6 +3,10 @@ Voidwatch module and upload scripts                                          MIT
 1. Close the game client.
 2. Copy the "voidwatch" folder into the modules folder of your client: the folder that holds the
    other modules (the ones named game_... and client_...).
+   Orion client: it loads modules only from its own files, so Voidwatch runs from the bot folder.
+   In the client's data folder, make a folder "_voidwatch" inside "bot", copy the "voidwatch" folder
+   into it (bot/_voidwatch/voidwatch), and copy voidwatch/voidwatch_start.lua into the folder of the
+   bot config you use, for example bot/vBot_4.8.
 3. Set up the upload script once, by double-clicking:
      Windows:  setup-windows.cmd
      macOS:    setup-mac.command   (the first time: right-click it, pick Open, then Open again)

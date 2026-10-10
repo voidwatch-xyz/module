@@ -7,10 +7,10 @@ local button, dot, win, refs, shape, timer, styled, lastState, site
 
 -- the folder this module sits in: a click runs outside the script, so paths are given in full
 local function home()
-  for _, dir in ipairs({ '/modules/voidwatch/', '/mods/voidwatch/' }) do
-    if g_resources.fileExists(dir .. 'voidwatch.otui') then return dir end
+  for _, dir in ipairs({ Voidwatch.home, '/modules/voidwatch/', '/mods/voidwatch/' }) do
+    if dir and g_resources.fileExists(dir .. 'voidwatch.otui') then return dir end
   end
-  return '/modules/voidwatch/'
+  return Voidwatch.home or '/modules/voidwatch/'
 end
 
 local function ago(s)

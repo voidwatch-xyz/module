@@ -1,7 +1,8 @@
 -- Voidwatch reference module, feed schema vw.status/1. MIT licence.
 --
 -- The client makes no web requests. Clients on one computer often share a write directory, so every character has
--- its own folder, <write dir>/voidwatch/<character>/. The module writes files there and the upload script answers:
+-- its own folder, <write dir>/voidwatch/<character>/, or <write dir>/bot/_voidwatch/data/<character>/ when the module
+-- runs from the bot folder (voidwatch_start.lua). The module writes files there and the upload script answers:
 --   outbox/status.json          the character state: every 2 s while someone watches, every 30 s otherwise
 --   outbox/capture.png          a screenshot of the game view, when the last reply asked for one
 --   outbox/pair-request.json    who wants a pairing code, until the character is paired
@@ -12,7 +13,7 @@
 -- Everything the stock client knows, the module reads itself. The rest comes from adapters (/developers/new-server):
 --   Voidwatch.register(adapter)    a server adapter in this module, for example orion.lua; it runs only on its server
 --   Voidwatch.attachBot(adapter)   the bot adapter, a script in the bot's config folder; it attaches every 10 s
--- A file named "off" in <write dir>/voidwatch stops the module in every client. In the console,
+-- A file named "off" in the data folder stops the module in every client. In the console,
 -- modules.voidwatch.Voidwatch.stop() stops this one and modules.voidwatch.Voidwatch.status() shows what it does;
 -- modules.voidwatch.Voidwatch.installBot() and .removeBot() add or remove the bot adapter in the selected bot config,
 -- and modules.voidwatch.Voidwatch.resetLoot() starts the loot, supply and time counters over. After an update that adds a file,
@@ -20,12 +21,20 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.6.1'
-local ROOT = '/voidwatch'
+local MODULE = 'voidwatch-feed/0.7.0'
+-- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
+-- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
+local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
+local BOT_MODE = HOME:find('/_voidwatch/', 1, true) ~= nil
+local ROOT = BOT_MODE and (HOME:gsub('[^/]+/$', '') .. 'data') or '/voidwatch'
+local HOMES = BOT_MODE and { HOME } or { HOME, '/modules/voidwatch/', '/mods/voidwatch/' }
+local START_FILE = 'voidwatch_start.lua'
+Voidwatch.home, Voidwatch.botMode = HOME, BOT_MODE
 local LOOP_MS = 1000                                    -- how often the module looks at the reply; writing a file is cheap
 local SERVER = ''                                       -- set it, or let an adapter return the server field
 local CAPTURES = true                                   -- the game view only: the whole window is larger than the API takes
-local COMMANDS = false                                  -- stays off until commands have run for hours on a real client
+local COMMANDS = true                                   -- a player can still turn them off per client on the website
+local COMMAND_TTL = 60                                  -- seconds: a command older than this is not run
 local BOT_FRESH_MS = 30000                              -- bot data older than this is dropped: the bot reloaded or stopped
 local LOOT_FLUSH_MS = 10000                             -- the loot file is written at most this often, and at logout
 local LOOT_ITEMS = 200                                  -- the most items one loot source keeps, as the API takes
@@ -99,7 +108,7 @@ end
 local function features()
   local list = { 'status' }
   if CAPTURES then list[#list + 1] = 'captures' end
-  if COMMANDS then list[#list + 1] = 'commands' end
+  if COMMANDS and not (me.settings and me.settings.commands == false) then list[#list + 1] = 'commands' end
   return list
 end
 
@@ -482,6 +491,23 @@ local function guard()
   end
 end
 
+local function actionNames()
+  local names, seen = {}, {}
+  local function add(t)
+    for name in pairs(type(t) == 'table' and t or {}) do
+      if not seen[name] then seen[name], names[#names + 1] = true, name end
+    end
+  end
+  add(Voidwatch.actions)
+  for _, id in ipairs(order) do
+    if adapters[id].running then add(adapters[id].def.actions) end
+  end
+  local b = freshBot()
+  if b then add(b.def.actions) end
+  table.sort(names)
+  return names
+end
+
 local function state(p)
   local level, exp = p:getLevel(), p:getExperience()
   if not level or level < 1 or not exp or exp < 0 then return nil end  -- right after a relog the server sends -1
@@ -526,6 +552,7 @@ local function state(p)
   s.used = usedState()
   s.supplies, s.suppliesSource = supplyState(s.supplies, not (me.settings and me.settings.supplyList == false))
   s.adapters = list(adapterStates())
+  if COMMANDS and not (me.settings and me.settings.commands == false) then s.actions = list(actionNames()) end
   return s
 end
 
@@ -545,29 +572,66 @@ local function pairing(name)
   elseif not me.answered and not me.hinted and g_clock.millis() - me.since > SETUP_HINT_MS then
     me.hinted = true
     say('the upload script did not answer. Run the Voidwatch setup once. If it does not find this client, give it '
-        .. 'this folder: ' .. g_resources.getWriteDir() .. 'voidwatch')
+        .. 'this folder: ' .. g_resources.getWriteDir() .. ROOT:sub(2))
   end
   return false
 end
 
-local function runCommands()
-  local text = read(me.dir .. '/inbox/commands.json')
-  if not text or text == me.lastCommands then return end
-  me.lastCommands = text
-  local ok, cmds = pcall(json.decode, text)
-  if not ok or type(cmds) ~= 'table' then return end
-  local results = {}
-  for _, c in ipairs(cmds) do
-    local fn = action(c.action)
-    local done, message = false, 'not supported on this client'
-    if fn then
-      local okRun, res, msg = pcall(fn, c.args or {})
-      done, message = okRun and res ~= false, okRun and msg or tostring(res)
-    end
-    table.insert(results, { id = c.id, ok = done, message = message })
-  end
-  write(me.dir .. '/outbox/results.json', json.encode(results))
+local function serverNow()
+  if me.serverAt and me.serverLocal then return me.serverAt + (os.time() - me.serverLocal) end
+  return os.time()
 end
+
+local function inboxFiles()
+  local files = {}
+  local ok, list = pcall(g_resources.listDirectoryFiles, me.dir .. '/inbox')
+  for _, f in ipairs(ok and type(list) == 'table' and list or {}) do
+    f = tostring(f)
+    if f == 'commands.json' or f:match('^commands%-[%w%-]+%.json$') then files[#files + 1] = f end
+  end
+  table.sort(files)
+  return files
+end
+
+local function addResults(results)
+  local path = me.dir .. '/outbox/results.json'
+  local ok, old = pcall(json.decode, read(path) or '[]')
+  local all = ok and type(old) == 'table' and old or {}
+  for _, r in ipairs(results) do all[#all + 1] = r end
+  write(path, json.encode(all))
+end
+
+local ran, ranOrder = {}, {}
+local function runCommands()
+  local results = {}
+  for _, f in ipairs(inboxFiles()) do
+    local path = me.dir .. '/inbox/' .. f
+    local ok, cmds = pcall(json.decode, read(path) or '')
+    pcall(g_resources.deleteFile, path)
+    for _, c in ipairs(ok and type(cmds) == 'table' and cmds or {}) do
+      local id = type(c) == 'table' and tonumber(c.id)
+      if id and not ran[id] then
+        ran[id], ranOrder[#ranOrder + 1] = true, id
+        if #ranOrder > 200 then ran[table.remove(ranOrder, 1)] = nil end
+        local done, message = false, 'not supported on this client'
+        if serverNow() - (tonumber(c.createdAt) or 0) > COMMAND_TTL then
+          message = 'too old: sent more than a minute ago'
+        elseif me.settings and me.settings.commands == false then
+          message = 'commands are off for this client'
+        else
+          local fn = action(c.action)
+          if fn then
+            local okRun, res, msg = pcall(fn, type(c.args) == 'table' and c.args or {})
+            done, message = okRun and res ~= false, okRun and msg or tostring(res)
+          end
+        end
+        results[#results + 1] = { id = id, ok = done, message = message and tostring(message):sub(1, 200) or nil }
+      end
+    end
+  end
+  if #results > 0 then addResults(results) end
+end
+
 
 local function step()
   if g_resources.fileExists(ROOT .. '/off') or not g_game.isOnline() then return end
@@ -596,9 +660,11 @@ local function step()
   local paired = pairing(name)
   -- the reply carries the server time, so a new text means the upload script got an answer just now
   local replyText = paired and read(me.dir .. '/inbox/reply.json') or nil
-  if replyText and replyText ~= me.replyText then me.replyText, me.replyAt = replyText, g_clock.millis() end
+  local fresh = replyText and replyText ~= me.replyText
+  if fresh then me.replyText, me.replyAt = replyText, g_clock.millis() end
   local okReply, reply = pcall(json.decode, replyText or '{}')
   reply = okReply and type(reply) == 'table' and reply or {}
+  if fresh and tonumber(reply.at) then me.serverAt, me.serverLocal = tonumber(reply.at), os.time() end
   me.reply = reply
   me.settings = type(reply.settings) == 'table' and reply.settings or {}
   local now = g_clock.millis()
@@ -622,6 +688,7 @@ local function step()
 end
 
 local checkUpdates   -- below, with the window's actions
+local ensureStartFile   -- below, with the bot adapter
 
 local function tick()
   loopEvent = nil
@@ -632,6 +699,7 @@ local function tick()
     guard()
     if halted then return end
   end
+  pcall(ensureStartFile)
   local ok, err = pcall(step)
   if ok then
     errors = 0
@@ -647,6 +715,11 @@ end
 
 -- actions every client can run without an adapter
 Voidwatch.actions.capture = function() me.lastShot = -math.huge; return true end
+Voidwatch.actions.reset_loot = function()
+  if not ledger then return false, 'not logged in' end
+  Voidwatch.resetLoot()
+  return true, 'loot, supplies and time reset'
+end
 Voidwatch.actions.logout_in_pz = function()
   local p = g_game.getLocalPlayer()
   if p and inPz(p) then g_game.safeLogout(); return true end
@@ -667,10 +740,49 @@ function Voidwatch.register(def)
   return true
 end
 
+local function botConfig()
+  local ok, name = pcall(function() return modules.game_bot.contentsPanel.config:getCurrentOption().text end)
+  return ok and type(name) == 'string' and name ~= '' and name or nil
+end
+
+local function bundledBot()
+  for _, home in ipairs(HOMES) do
+    local src = read(home .. 'bot/voidwatch_bot.lua')
+    if src then return src end
+  end
+end
+
+-- From the bot folder, the start file is what runs the module and the bot adapter, so every bot config the player
+-- picks needs its own copy. It is copied once per config and session.
+local startChecked = {}
+function ensureStartFile()
+  local config = botConfig()
+  if not BOT_MODE or not config or startChecked[config] then return end
+  startChecked[config] = true
+  local target = '/bot/' .. config .. '/' .. START_FILE
+  if g_resources.fileExists(target) then return end
+  local src = read(HOME .. START_FILE)
+  if src and write(target, src) then say(('start file copied to %s: Voidwatch starts with that bot config too.'):format(config)) end
+end
+
+local botRefreshed = false
+local function refreshBot(def)
+  if botRefreshed or BOT_MODE then return end
+  local src = bundledBot()
+  local want = src and tonumber(src:match("local VERSION = '(%d+)'"))
+  local config = botConfig()
+  if not want or not config or (tonumber(def.version) or 0) >= want then return end
+  botRefreshed = true
+  if write('/bot/' .. config .. '/voidwatch_bot.lua', src) then
+    say(('bot adapter %d copied to %s. Reload the bot to use the bot commands.'):format(want, config))
+  end
+end
+
 function Voidwatch.attachBot(def)
   if type(def) ~= 'table' then return false end
   if bot and bot.def == def then bot.at = g_clock.millis(); return true end
   bot = { def = def, at = g_clock.millis(), errors = 0 }
+  refreshBot(def)
   return true
 end
 
@@ -695,19 +807,17 @@ function Voidwatch.terminate()
   loopEvent = nil
 end
 
-local function botConfig()
-  local ok, name = pcall(function() return modules.game_bot.contentsPanel.config:getCurrentOption().text end)
-  return ok and type(name) == 'string' and name ~= '' and name or nil
-end
 
 -- console helpers, see the top of the file. The bot file goes in only when the player asks for it.
 function Voidwatch.installBot()
   local config = botConfig()
   if not config then return say('no bot config is selected in the bot window.') end
-  local src
-  for _, path in ipairs({ '/modules/voidwatch/bot/voidwatch_bot.lua', '/mods/voidwatch/bot/voidwatch_bot.lua' }) do
-    src = src or read(path)
+  if BOT_MODE then
+    startChecked[config] = nil
+    ensureStartFile()
+    return say('from the bot folder, the start file in ' .. config .. ' runs the bot adapter.')
   end
+  local src = bundledBot()
   if not src then return say('the bot adapter is missing from the module folder.') end
   if write('/bot/' .. config .. '/voidwatch_bot.lua', src) then
     say('bot adapter added to ' .. config .. '. Reload the bot, or log in again, to start it.')
@@ -784,14 +894,16 @@ local function vnum(v)
 end
 local function who() return g_game.isOnline() and g_game.getCharacterName() or '' end
 local function filesVersion()
-  for _, path in ipairs({ '/modules/voidwatch/voidwatch.otmod', '/mods/voidwatch/voidwatch.otmod' }) do
-    local text = read(path)
+  for _, home in ipairs(HOMES) do
+    local text = read(home .. 'voidwatch.otmod')
     if text then return text:match('version:%s*([%d%.]+)') end
   end
 end
 local function reloadSelf()
   if Voidwatch.ui and Voidwatch.ui.isOpen and Voidwatch.ui.isOpen() then pcall(g_settings.set, 'voidwatch-reopen', true) end
   -- on the next frame, outside the module's own call stack
+  local boot = BOT_MODE and modules._G and modules._G.VoidwatchBoot
+  if boot then return addEvent(function() pcall(boot.restart) end) end
   addEvent(function()
     pcall(g_modules.discoverModules)
     local m = g_modules.getModule('voidwatch')
@@ -857,7 +969,7 @@ function Voidwatch.view()
     captures = CAPTURES and settings.captures ~= false, supplyList = settings.supplyList ~= false,
     suppliesSource = me.last and me.last.suppliesSource or nil, commands = COMMANDS,
     heapMB = math.floor(collectgarbage('count') / 1024), clientMB = okMem and type(bytes) == 'number' and mb(bytes) or nil,
-    errors = errors, lastError = lastError, sources = sources(), dir = g_resources.getWriteDir() .. 'voidwatch',
+    errors = errors, lastError = lastError, sources = sources(), dir = g_resources.getWriteDir() .. ROOT:sub(2),
     update = {
       running = RUNNING, latest = upd.latest, files = upd.files, backup = upd.backup, asked = upd.asked,
       canUpdate = upd.updatable and vnum(upd.latest) > vnum(RUNNING) and not upd.asked,
