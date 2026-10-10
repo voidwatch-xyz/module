@@ -762,7 +762,12 @@ function ensureStartFile()
   local target = '/bot/' .. config .. '/' .. START_FILE
   if g_resources.fileExists(target) then return end
   local src = read(HOME .. START_FILE)
-  if src and write(target, src) then say(('start file copied to %s: Voidwatch starts with that bot config too.'):format(config)) end
+  if not (src and write(target, src)) then return end
+  addEvent(function()
+    local ok = botConfig() == config and pcall(function() modules.game_bot.refresh() end)
+    say(ok and ('start file copied to %s, bot reloaded: Voidwatch runs with this config now.'):format(config)
+      or ('start file copied to %s. Reload the bot to use the bot commands.'):format(config))
+  end)
 end
 
 local botRefreshed = false
