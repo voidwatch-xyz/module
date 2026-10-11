@@ -2,7 +2,7 @@
 -- turns it on; the bot loads every .lua file there. It hands the bot's state to the module every 10 s, and it changes
 -- the bot only through the commands below. It works with the stock cavebot, vBot and presets built on them: each value
 -- is read only where its function exists, and a missing one stays out of the status.
-local VERSION = '3'
+local VERSION = '4'
 
 local config = (function()
   local ok, name = pcall(function() return modules.game_bot.contentsPanel.config:getCurrentOption().text end)
@@ -86,8 +86,8 @@ end
 
 -- where the character is in its route, from the label of each route part: the player names the labels, and each
 -- role takes a comma list of names (Clients → Module on the website)
-local ROLES = { 'refill', 'hunt', 'check', 'leave' }
-local LEG = { refill = 'town', hunt = 'hunting', check = 'at_check', leave = 'leaving' }
+local ROLES = { 'hunt', 'refill', 'city', 'resp' }
+local LEG = { hunt = 'hunting', refill = 'to_city', city = 'in_city', resp = 'to_resp' }
 local PARKED_SQM = 8
 
 local function xyz(value)
@@ -114,12 +114,15 @@ local function whereInRoute()
   spot = { at = now }
   local list = type(CaveBot) == 'table' and CaveBot.actionList
   if not list then return spot end
-  local names, marks, children = roleNames(), {}, list:getChildren()
+  local names, marks, roleAt, children = roleNames(), {}, {}, list:getChildren()
   for index, child in ipairs(children) do
     if child.action == 'label' then
       local v = tostring(child.value):lower()
-      for role, set in pairs(names) do
-        if set[v] and not marks[role] then marks[role] = index end
+      for _, role in ipairs(ROLES) do
+        if names[role][v] then
+          roleAt[index] = roleAt[index] or role
+          marks[role] = marks[role] or index
+        end
       end
     end
   end
@@ -134,7 +137,7 @@ local function whereInRoute()
     local pos = p and p:getPosition()
     local okPz, pz = pcall(function() return p:hasState(PlayerStates.Pz) end)
     local near = false
-    for i = marks.refill + 1, #children do
+    for i = marks.city + 1, #children do
       if children[i].action == 'goto' then
         local x, y, z = xyz(children[i].value)
         near = pos and x and pos.z == z and math.max(math.abs(pos.x - x), math.abs(pos.y - y)) <= PARKED_SQM or false
@@ -147,12 +150,10 @@ local function whereInRoute()
   local cur = list:getFocusedChild()
   local at = cur and list:getChildIndex(cur)
   if not at then spot.phase = 'unknown'; return spot end
-  local leg, legAt, last, lastAt = nil, 0, nil, 0
-  for role, index in pairs(marks) do
-    if index <= at and index > legAt then leg, legAt = role, index end
-    if index > lastAt then last, lastAt = role, index end
+  for step = 0, #children - 1 do
+    local role = roleAt[(at - 1 - step) % #children + 1]
+    if role then spot.phase = LEG[role]; return spot end
   end
-  spot.phase = LEG[leg or last]
   return spot
 end
 
