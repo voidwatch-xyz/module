@@ -21,7 +21,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.7.1'
+local MODULE = 'voidwatch-feed/0.7.2'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -51,7 +51,7 @@ local SKULLS = { [SkullWhite or 3] = 'white', [SkullRed or 4] = 'red', [SkullBla
                  [SkullGreen or 2] = 'green', [SkullOrange or 6] = 'orange' }
 
 -- the status fields an adapter may fill; anything else it returns is ignored
-local FIELDS = { 'server', 'vocation', 'expPerHour', 'route', 'routeOn', 'label', 'routes', 'targetOn', 'botConfig',
+local FIELDS = { 'server', 'vocation', 'expPerHour', 'route', 'routeOn', 'label', 'phase', 'labelsMissing', 'routes', 'targetOn', 'botConfig',
                  'targetProfile', 'botProfile', 'supplies', 'tasks', 'taskPoints', 'taskWeek', 'loot', 'lootHours',
                  'lootSource', 'blessed', 'redemption', 'redemptionLeft' }
 
@@ -365,6 +365,15 @@ local function action(name)
   return b and type(b.def.actions) == 'table' and b.def.actions[name] or nil
 end
 
+local shipped, bundledBot
+local function shippedBot()
+  if shipped == nil then
+    local src = bundledBot()
+    shipped = src and src:match("local VERSION = '(%d+)'") or false
+  end
+  return shipped or nil
+end
+
 local function adapterStates()
   local states = {}
   for _, id in ipairs(order) do
@@ -372,7 +381,8 @@ local function adapterStates()
     if rec.running or rec.off then states[#states + 1] = { id = id, version = tostring(rec.def.version or ''), on = rec.running } end
   end
   if bot then
-    states[#states + 1] = { id = tostring(bot.def.id or 'bot'), version = tostring(bot.def.version or ''), on = freshBot() ~= nil }
+    states[#states + 1] = { id = tostring(bot.def.id or 'bot'), version = tostring(bot.def.version or ''), on = freshBot() ~= nil,
+                            want = shippedBot() }
   end
   return states
 end
@@ -745,7 +755,7 @@ local function botConfig()
   return ok and type(name) == 'string' and name ~= '' and name or nil
 end
 
-local function bundledBot()
+function bundledBot()
   for _, home in ipairs(HOMES) do
     local src = read(home .. 'bot/voidwatch_bot.lua')
     if src then return src end
@@ -781,6 +791,10 @@ local function refreshBot(def)
   if write('/bot/' .. config .. '/voidwatch_bot.lua', src) then
     say(('bot adapter %d copied to %s. Reload the bot to use the bot commands.'):format(want, config))
   end
+end
+
+function Voidwatch.labelRoles()
+  return type(me.settings) == 'table' and type(me.settings.labels) == 'table' and me.settings.labels or {}
 end
 
 function Voidwatch.attachBot(def)
@@ -973,6 +987,7 @@ function Voidwatch.view()
     statusEvery = tonumber(me.reply and me.reply.statusEvery), captureEvery = tonumber(me.reply and me.reply.captureEvery),
     captures = CAPTURES and settings.captures ~= false, supplyList = settings.supplyList ~= false,
     suppliesSource = me.last and me.last.suppliesSource or nil, commands = COMMANDS,
+    routeName = me.last and me.last.route or nil, phase = me.last and me.last.phase or nil, labelsMissing = me.last and me.last.labelsMissing or nil,
     heapMB = math.floor(collectgarbage('count') / 1024), clientMB = okMem and type(bytes) == 'number' and mb(bytes) or nil,
     errors = errors, lastError = lastError, sources = sources(), dir = g_resources.getWriteDir() .. ROOT:sub(2),
     update = {

@@ -101,6 +101,7 @@ local function build(v)
   if v.state == 'connected' then
     refs.upload = line(body, 'Upload script')
     refs.sending = line(body, 'Sending', 'The site sets the pace: faster while someone has the dashboard open.')
+    refs.route = line(body, 'Route', 'Where the character is in its route, from the route labels refill, hunt, check and leave.')
     refs.memory = line(body, 'Memory')
     refs.errors = line(body, 'Errors')
     stopButtons(body)
@@ -178,6 +179,9 @@ local function build(v)
   for _, w in ipairs(body:getChildren()) do w:setWidth(body:getWidth()) end
 end
 
+local PHASES = { town = 'in town', hunting = 'hunting', at_check = 'at check', leaving = 'leaving', parked = 'parked',
+                 stopped = 'stopped', unknown = 'no route labels' }
+
 local function fill(v)
   refs.who:setText((v.character or 'Not logged in') .. (v.server and (' - ' .. v.server) or ''))
   refs.state.dot:setBackgroundColor(COLOURS[v.state] or '#777777')
@@ -193,6 +197,11 @@ local function fill(v)
   if refs.sending then
     refs.sending.value:setText(('status %s, %s'):format(every(v.statusEvery),
       v.captures and ('screenshot ' .. every(v.captureEvery)) or 'no screenshots'))
+  end
+  if refs.route then
+    local text = v.phase and PHASES[v.phase] or 'no bot data'
+    if v.phase == 'unknown' and v.labelsMissing then text = 'labels missing: ' .. table.concat(v.labelsMissing, ', ') end
+    refs.route.value:setText(v.routeName and (short(v.routeName, 18) .. ' - ' .. text) or text)
   end
   if refs.memory then refs.memory.value:setText(('Lua %d MB, client %s MB'):format(v.heapMB, tostring(v.clientMB or '?'))) end
   if refs.errors then
