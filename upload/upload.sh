@@ -132,14 +132,14 @@ fi
 
 DIR=${2%/}
 OUT="$DIR/outbox" IN="$DIR/inbox" TOKEN_FILE="$DIR/.token" AUTH="$DIR/.auth" BODY="$DIR/.body"
-SENT_MAP="$DIR/../.minimap-sent"
+SENT_MAPS="$DIR/../.minimap-sent.d" MAP_RESET="$DIR/../.minimap-reset"
 # the client's write folder: two levels up from a character folder, four from one in bot/_voidwatch/data
 case "$DIR" in
   */_voidwatch/data/*) WRITE_DIR="$DIR/../../../.." ;;
   *) WRITE_DIR="$DIR/../.." ;;
 esac
 mkdir -p "$IN"
-last_sent=0 minimap_check=0 status_every=30 refused=0 minimap_on=1 wake=0 said="" fetched=0
+last_sent=0 minimap_check=0 status_every=30 refused=0 minimap_on=1 need_map=0 wake=0 said="" fetched=0
 # a game client that runs through Wine reports Windows: the website takes the system from here
 case $(uname -s 2>/dev/null) in
   Darwin) host_os=macOS ;;
@@ -227,6 +227,7 @@ while [ -d "$DIR" ]; do
           status_every=$(field "$IN/reply.json" statusEvery)
           status_every=${status_every:-30}
           case $(cat "$IN/reply.json") in *'"minimap":false'*) minimap_on=0 ;; *) minimap_on=1 ;; esac
+          case $(cat "$IN/reply.json") in *'"needMap":true'*) need_map=1 ;; *) need_map=0 ;; esac
           if [ "$(field "$IN/reply.json" commands)" != 0 ] && [ "$(request GET /commands -m 10)" = 200 ]; then
             fetched=$((fetched + 1))
             mv -f "$BODY" "$IN/commands-$(date +%s)-$fetched.json"
@@ -274,24 +275,29 @@ while [ -d "$DIR" ]; do
     rm -f "$OUT/.results" "$OUT/.result"
   fi
 
-  # the client's own minimap sits in the write folder. The clients there share it, so only the first
-  # paired character sends it, and only after it changed.
+  # the client's own minimap files sit in the write folder. The clients there share them, so only the first paired
+  # character sends them: each file after it changed, at most every 30 minutes, and all again when the site has no map.
   if [ "$minimap_on" = 1 ] && [ $((now - minimap_check)) -ge 60 ]; then
     minimap_check=$now
     first=""
     for t in "$DIR"/../*/inbox/pair.json; do grep -q '"paired":true' "$t" 2>/dev/null && { first=$t; break; }; done
     if [ "$first" = "$DIR/../${DIR##*/}/inbox/pair.json" ]; then
-      map="" best=0
+      mkdir -p "$SENT_MAPS"
+      if [ "$need_map" = 1 ] && [ $((now - $(cat "$MAP_RESET" 2>/dev/null || echo 0))) -ge 1800 ]; then
+        rm -f "$SENT_MAPS"/*.otmm
+        printf '%s' "$now" > "$MAP_RESET"
+      fi
       for f in "$WRITE_DIR"/minimap*.otmm; do
         [ -f "$f" ] || continue
-        mm=$(mtime "$f")
-        [ "$mm" -gt "$best" ] && map=$f best=$mm
-      done
-      if [ -n "$map" ] && [ "$best" != "$(cat "$SENT_MAP" 2>/dev/null)" ]; then
-        case $(request POST /minimap -m 120 -H "Content-Type: application/octet-stream" --data-binary "@$map") in
-          200 | 409) printf '%s' "$best" > "$SENT_MAP" ;;
+        mm=$(mtime "$f") mark="$SENT_MAPS/${f##*/}" was_mm="" was_at=0
+        [ -f "$mark" ] && read -r was_mm was_at < "$mark"
+        [ "$mm" = "$was_mm" ] && continue
+        [ $((now - ${was_at:-0})) -ge 1800 ] || continue
+        case $(request POST /minimap -m 120 -H "Content-Type: application/octet-stream" -H "X-File-Mtime: $mm" --data-binary "@$f") in
+          200 | 409 | 422) printf '%s %s\n' "$mm" "$now" > "$mark" ;;
+          429) break ;;
         esac
-      fi
+      done
     fi
   fi
 
