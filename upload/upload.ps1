@@ -62,6 +62,20 @@ if (-not $Worker) {
       Copy-Item -Recurse (Join-Path $b 'voidwatch') $m -ErrorAction SilentlyContinue
       Update-Done $d @{ ok = $false; error = 'the swap failed' }; return
     }
+    # the installed copy of this script updates itself too, once the new one parses; the main loop then starts it again
+    $new = Join-Path $t 'x\upload\upload.ps1'
+    if ($PSCommandPath.StartsWith($Home_, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path $new) -and
+        (Get-FileHash $new).Hash -ne (Get-FileHash $PSCommandPath).Hash) {
+      $errors = $null
+      [void][System.Management.Automation.Language.Parser]::ParseFile($new, [ref]$null, [ref]$errors)
+      if (-not $errors) {
+        try {
+          Copy-Item -Force $new "$PSCommandPath.new"
+          Move-Item -Force "$PSCommandPath.new" $PSCommandPath
+          $script:restartSelf = $true
+        } catch { }
+      }
+    }
     Update-Done $d @{ ok = $true; version = $v; from = $old; by = $by; at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
   }
   function Rollback-Module($d) {
@@ -74,6 +88,7 @@ if (-not $Worker) {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $b
     Update-Done $d @{ ok = $true; version = $v; rollback = $true; by = [string]$req.by; at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
   }
+  $restartSelf = $false
   while ($true) {
     # the newest release, asked at most every 6 hours: GitHub answers 60 questions an hour without an account
     if (((Get-Date) - $latestAt).TotalHours -ge 6) {
@@ -106,6 +121,20 @@ if (-not $Worker) {
       Write-Text (Join-Path $d 'latest.json') (@{ latest = $latest; updatable = $writable; backup = if ($backup) { $backup.Trim() } else { '' } } | ConvertTo-Json -Compress)
       if ($writable -and (Test-Path (Join-Path $d 'update-request.json'))) { Update-Module $d }
       if ($writable -and (Test-Path (Join-Path $d 'rollback-request.json'))) { Rollback-Module $d }
+    }
+    if ($restartSelf) {
+      # the new script takes over: the workers stop, and a new hidden main script starts them again
+      foreach ($d in ($found | Sort-Object -Unique)) {
+        foreach ($c in @(Get-ChildItem $d -Directory -ErrorAction SilentlyContinue)) {
+          $pf = Join-Path $c.FullName '.pid'
+          $wp = if (Test-Path $pf) { Get-Process -Id ([int](Get-Content $pf)) -ErrorAction SilentlyContinue }
+          if ($wp -and $wp.ProcessName -eq 'powershell') { Stop-Process -Id $wp.Id -Force -ErrorAction SilentlyContinue }
+        }
+      }
+      $again = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+      if ($Dir) { $again += "`"$Dir`"" }
+      Start-Process powershell -WindowStyle Hidden -ArgumentList $again
+      exit
     }
     Start-Sleep -Seconds 2
   }
