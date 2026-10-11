@@ -365,6 +365,15 @@ local function action(name)
   return b and type(b.def.actions) == 'table' and b.def.actions[name] or nil
 end
 
+local shipped, bundledBot
+local function shippedBot()
+  if shipped == nil then
+    local src = bundledBot()
+    shipped = src and src:match("local VERSION = '(%d+)'") or false
+  end
+  return shipped or nil
+end
+
 local function adapterStates()
   local states = {}
   for _, id in ipairs(order) do
@@ -372,7 +381,8 @@ local function adapterStates()
     if rec.running or rec.off then states[#states + 1] = { id = id, version = tostring(rec.def.version or ''), on = rec.running } end
   end
   if bot then
-    states[#states + 1] = { id = tostring(bot.def.id or 'bot'), version = tostring(bot.def.version or ''), on = freshBot() ~= nil }
+    states[#states + 1] = { id = tostring(bot.def.id or 'bot'), version = tostring(bot.def.version or ''), on = freshBot() ~= nil,
+                            want = shippedBot() }
   end
   return states
 end
@@ -745,7 +755,7 @@ local function botConfig()
   return ok and type(name) == 'string' and name ~= '' and name or nil
 end
 
-local function bundledBot()
+function bundledBot()
   for _, home in ipairs(HOMES) do
     local src = read(home .. 'bot/voidwatch_bot.lua')
     if src then return src end
