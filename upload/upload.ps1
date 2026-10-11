@@ -62,6 +62,20 @@ if (-not $Worker) {
       Copy-Item -Recurse (Join-Path $b 'voidwatch') $m -ErrorAction SilentlyContinue
       Update-Done $d @{ ok = $false; error = 'the swap failed' }; return
     }
+    # the installed copy of this script updates itself too, once the new one parses; the main loop then starts it again
+    $new = Join-Path $t 'x\upload\upload.ps1'
+    if ($PSCommandPath.StartsWith($Home_, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path $new) -and
+        (Get-FileHash $new).Hash -ne (Get-FileHash $PSCommandPath).Hash) {
+      $errors = $null
+      [void][System.Management.Automation.Language.Parser]::ParseFile($new, [ref]$null, [ref]$errors)
+      if (-not $errors) {
+        try {
+          Copy-Item -Force $new "$PSCommandPath.new"
+          Move-Item -Force "$PSCommandPath.new" $PSCommandPath
+          $script:restartSelf = $true
+        } catch { }
+      }
+    }
     Update-Done $d @{ ok = $true; version = $v; from = $old; by = $by; at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
   }
   function Rollback-Module($d) {
@@ -74,6 +88,7 @@ if (-not $Worker) {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $b
     Update-Done $d @{ ok = $true; version = $v; rollback = $true; by = [string]$req.by; at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
   }
+  $restartSelf = $false
   while ($true) {
     # the newest release, asked at most every 6 hours: GitHub answers 60 questions an hour without an account
     if (((Get-Date) - $latestAt).TotalHours -ge 6) {
@@ -107,6 +122,20 @@ if (-not $Worker) {
       if ($writable -and (Test-Path (Join-Path $d 'update-request.json'))) { Update-Module $d }
       if ($writable -and (Test-Path (Join-Path $d 'rollback-request.json'))) { Rollback-Module $d }
     }
+    if ($restartSelf) {
+      # the new script takes over: the workers stop, and a new hidden main script starts them again
+      foreach ($d in ($found | Sort-Object -Unique)) {
+        foreach ($c in @(Get-ChildItem $d -Directory -ErrorAction SilentlyContinue)) {
+          $pf = Join-Path $c.FullName '.pid'
+          $wp = if (Test-Path $pf) { Get-Process -Id ([int](Get-Content $pf)) -ErrorAction SilentlyContinue }
+          if ($wp -and $wp.ProcessName -eq 'powershell') { Stop-Process -Id $wp.Id -Force -ErrorAction SilentlyContinue }
+        }
+      }
+      $again = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+      if ($Dir) { $again += "`"$Dir`"" }
+      Start-Process powershell -WindowStyle Hidden -ArgumentList $again
+      exit
+    }
     Start-Sleep -Seconds 2
   }
 }
@@ -114,12 +143,12 @@ if (-not $Worker) {
 $Api = if ($env:VOIDWATCH_API) { $env:VOIDWATCH_API } else { 'https://voidwatch.xyz/api/v1' }
 $Dir = $Dir.TrimEnd('\', '/')
 $Out = Join-Path $Dir 'outbox'; $In = Join-Path $Dir 'inbox'; $TokenFile = Join-Path $Dir '.token'
-$Parent = Split-Path $Dir; $SentMap = Join-Path $Parent '.minimap-sent'
+$Parent = Split-Path $Dir; $SentMaps = Join-Path $Parent '.minimap-sent.d'; $MapReset = Join-Path $Parent '.minimap-reset'
 # the client's write folder: two levels up from a character folder, four from one in bot\_voidwatch\data
 $WriteDir = if ($Parent -match '[\\/]_voidwatch[\\/]data$') { Split-Path (Split-Path (Split-Path $Parent)) } else { Split-Path $Parent }
 New-Item -ItemType Directory -Force -Path $In | Out-Null
 $lastSent = $null; $lastCapture = $null; $minimapCheck = [datetime]::MinValue
-$statusEvery = 30; $minimapOn = $true; $refused = 0; $wake = $false; $said = ''
+$statusEvery = 30; $minimapOn = $true; $needMap = $false; $refused = 0; $wake = $false; $said = ''
 
 # one line per change of state, never the token or the code
 function Note($text) {
@@ -131,8 +160,9 @@ function Note($text) {
 }
 
 # one call to the API: the HTTP status (0 without a connection) and the answer
-function Call($method, $path, $file, $type, $timeout) {
+function Call($method, $path, $file, $type, $timeout, $extra) {
   $a = @{ Method = $method; Uri = "$Api$path"; TimeoutSec = $timeout; UseBasicParsing = $true; Headers = @{} }
+  if ($extra) { foreach ($k in $extra.Keys) { $a.Headers[$k] = $extra[$k] } }
   if (Test-Path $TokenFile) { $a.Headers.Authorization = 'Bearer ' + (Get-Content $TokenFile -Raw).Trim() }
   if ($file) { $a.InFile = $file; $a.ContentType = $type }
   try {
@@ -216,6 +246,7 @@ while (Test-Path $Dir) {
         }
         $statusEvery = [int](Field $r.body 'statusEvery'); if (-not $statusEvery) { $statusEvery = 30 }
         $minimapOn = $r.body -notmatch '"minimap":false'
+        $needMap = $r.body -match '"needMap":true'
         if ((Field $r.body 'commands') -ne '0') {
           $c = Call 'Get' '/commands' $null $null 10
           if ($c.code -eq 200) { $fetched++; Put "$In\commands-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())-$fetched.json" $c.body }
@@ -252,20 +283,33 @@ while (Test-Path $Dir) {
       Remove-Item -Force -ErrorAction SilentlyContinue "$Out\.results", "$Out\.result"
     }
 
-    # the client's own minimap sits in the write folder. The clients there share it, so only the first
-    # paired character sends it, and only after it changed.
+    # the client's own minimap files sit in the write folder. The clients there share them, so only the first paired
+    # character sends them: each file after it changed, at most every 30 minutes, and all again when the site has no map.
     if ($minimapOn -and ($now - $minimapCheck).TotalSeconds -ge 60) {
       $minimapCheck = $now
       $first = Get-ChildItem $Parent -Directory -ErrorAction SilentlyContinue |
         Where-Object { "$(Get-Content (Join-Path $_.FullName 'inbox\pair.json') -Raw -ErrorAction SilentlyContinue)" -match '"paired":true' } |
         Sort-Object Name | Select-Object -First 1
       if ($first -and $first.FullName -eq (Get-Item $Dir).FullName) {
-        $map = Get-ChildItem $WriteDir -Filter 'minimap*.otmm' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
-          Select-Object -First 1
-        $stamp = if ($map) { [string]$map.LastWriteTimeUtc.Ticks } else { '' }
-        if ($map -and $stamp -ne "$(Get-Content $SentMap -Raw -ErrorAction SilentlyContinue)") {
-          $code = (Call 'Post' '/minimap' $map.FullName 'application/octet-stream' 120).code
-          if ($code -eq 200 -or $code -eq 409) { [IO.File]::WriteAllText($SentMap, $stamp) }
+        New-Item -ItemType Directory -Force -Path $SentMaps | Out-Null
+        $unix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $resetAt = [long]0
+        [void][long]::TryParse("$(Get-Content $MapReset -Raw -ErrorAction SilentlyContinue)".Trim(), [ref]$resetAt)
+        if ($needMap -and $unix - $resetAt -ge 1800) {
+          Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $SentMaps '*.otmm')
+          [IO.File]::WriteAllText($MapReset, [string]$unix)
+        }
+        foreach ($map in @(Get-ChildItem $WriteDir -Filter 'minimap*.otmm' -File -ErrorAction SilentlyContinue)) {
+          $mtime = ([DateTimeOffset]$map.LastWriteTimeUtc).ToUnixTimeSeconds()
+          $mark = Join-Path $SentMaps $map.Name
+          $was = "$(Get-Content $mark -Raw -ErrorAction SilentlyContinue)".Trim() -split '\s+'
+          if ($was[0] -eq [string]$mtime) { continue }
+          $sentAt = [long]0
+          if ($was.Count -gt 1) { [void][long]::TryParse($was[1], [ref]$sentAt) }
+          if ($unix - $sentAt -lt 1800) { continue }
+          $code = (Call 'Post' '/minimap' $map.FullName 'application/octet-stream' 120 @{ 'X-File-Mtime' = [string]$mtime }).code
+          if ($code -eq 200 -or $code -eq 409 -or $code -eq 422) { [IO.File]::WriteAllText($mark, "$mtime $unix") }
+          elseif ($code -eq 429) { break }
         }
       }
     }
