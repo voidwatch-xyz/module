@@ -179,8 +179,8 @@ local function build(v)
   for _, w in ipairs(body:getChildren()) do w:setWidth(body:getWidth()) end
 end
 
-local PHASES = { town = 'in town', hunting = 'hunting', at_check = 'at check', leaving = 'leaving', parked = 'parked',
-                 stopped = 'stopped', unknown = 'no route labels' }
+local PHASES = { hunting = 'hunting', to_city = 'to city', in_city = 'in city', to_resp = 'to resp', parked = 'parked',
+                 stopped = 'stopped', unknown = 'no route labels', town = 'in town', at_check = 'at check', leaving = 'leaving' }
 
 local function fill(v)
   refs.who:setText((v.character or 'Not logged in') .. (v.server and (' - ' .. v.server) or ''))
