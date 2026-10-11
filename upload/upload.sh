@@ -116,7 +116,10 @@ if [ "${1:-}" != --worker ]; then
       m=$(module_of "$d")
       writable=false
       [ -f "$m/voidwatch.otmod" ] && [ -w "$m" ] && [ -w "${m%/voidwatch}" ] && writable=true
-      write_file "${d%/}/latest.json" "{\"latest\":\"$latest\",\"updatable\":$writable,\"backup\":\"$(cat "${d%/}/backup/version" 2>/dev/null)\"}"
+      # the website passes on the newest release it saw on GitHub within 5 minutes; the higher of the two counts
+      told=$(sed -n 's/.*"latestModule": *"\([0-9.]*\)".*/\1/p' "${d%/}"/*/inbox/reply.json 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+      best=$(printf '%s\n%s\n' "$latest" "$told" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+      write_file "${d%/}/latest.json" "{\"latest\":\"$best\",\"updatable\":$writable,\"backup\":\"$(cat "${d%/}/backup/version" 2>/dev/null)\"}"
       [ "$writable" = true ] && [ -f "${d%/}/update-request.json" ] && update_module "$d"
       [ "$writable" = true ] && [ -f "${d%/}/rollback-request.json" ] && rollback_module "$d"
     done
