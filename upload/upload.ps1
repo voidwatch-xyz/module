@@ -118,7 +118,14 @@ if (-not $Worker) {
       $m = Module-Of $d
       $writable = Can-Write $m
       $backup = (Get-Content (Join-Path $d 'backup\version') -Raw -ErrorAction SilentlyContinue)
-      Write-Text (Join-Path $d 'latest.json') (@{ latest = $latest; updatable = $writable; backup = if ($backup) { $backup.Trim() } else { '' } } | ConvertTo-Json -Compress)
+      # the website passes on the newest release it saw on GitHub within 5 minutes; the higher of the two counts
+      $told = @(Get-ChildItem $d -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $r = Get-Content (Join-Path $_.FullName 'inbox\reply.json') -Raw -ErrorAction SilentlyContinue
+        if ($r -match '"latestModule"\s*:\s*"(\d+\.\d+\.\d+)"') { $matches[1] }
+      })
+      $best = @(@($latest) + $told | Where-Object { $_ -match '^\d+\.\d+\.\d+$' } | Sort-Object { [version]$_ } | Select-Object -Last 1)
+      $best = if ($best.Count) { [string]$best[0] } else { '' }
+      Write-Text (Join-Path $d 'latest.json') (@{ latest = $best; updatable = $writable; backup = if ($backup) { $backup.Trim() } else { '' } } | ConvertTo-Json -Compress)
       if ($writable -and (Test-Path (Join-Path $d 'update-request.json'))) { Update-Module $d }
       if ($writable -and (Test-Path (Join-Path $d 'rollback-request.json'))) { Rollback-Module $d }
     }
