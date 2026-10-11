@@ -21,7 +21,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.7.1'
+local MODULE = 'voidwatch-feed/0.7.2'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -51,7 +51,7 @@ local SKULLS = { [SkullWhite or 3] = 'white', [SkullRed or 4] = 'red', [SkullBla
                  [SkullGreen or 2] = 'green', [SkullOrange or 6] = 'orange' }
 
 -- the status fields an adapter may fill; anything else it returns is ignored
-local FIELDS = { 'server', 'vocation', 'expPerHour', 'route', 'routeOn', 'label', 'routes', 'targetOn', 'botConfig',
+local FIELDS = { 'server', 'vocation', 'expPerHour', 'route', 'routeOn', 'label', 'phase', 'labelsMissing', 'routes', 'targetOn', 'botConfig',
                  'targetProfile', 'botProfile', 'supplies', 'tasks', 'taskPoints', 'taskWeek', 'loot', 'lootHours',
                  'lootSource', 'blessed', 'redemption', 'redemptionLeft' }
 
@@ -783,6 +783,10 @@ local function refreshBot(def)
   end
 end
 
+function Voidwatch.labelRoles()
+  return type(me.settings) == 'table' and type(me.settings.labels) == 'table' and me.settings.labels or {}
+end
+
 function Voidwatch.attachBot(def)
   if type(def) ~= 'table' then return false end
   if bot and bot.def == def then bot.at = g_clock.millis(); return true end
@@ -973,6 +977,7 @@ function Voidwatch.view()
     statusEvery = tonumber(me.reply and me.reply.statusEvery), captureEvery = tonumber(me.reply and me.reply.captureEvery),
     captures = CAPTURES and settings.captures ~= false, supplyList = settings.supplyList ~= false,
     suppliesSource = me.last and me.last.suppliesSource or nil, commands = COMMANDS,
+    routeName = me.last and me.last.route or nil, phase = me.last and me.last.phase or nil, labelsMissing = me.last and me.last.labelsMissing or nil,
     heapMB = math.floor(collectgarbage('count') / 1024), clientMB = okMem and type(bytes) == 'number' and mb(bytes) or nil,
     errors = errors, lastError = lastError, sources = sources(), dir = g_resources.getWriteDir() .. ROOT:sub(2),
     update = {

@@ -2,7 +2,7 @@
 -- turns it on; the bot loads every .lua file there. It hands the bot's state to the module every 10 s, and it changes
 -- the bot only through the commands below. It works with the stock cavebot, vBot and presets built on them: each value
 -- is read only where its function exists, and a missing one stays out of the status.
-local VERSION = '2'
+local VERSION = '3'
 
 local config = (function()
   local ok, name = pcall(function() return modules.game_bot.contentsPanel.config:getCurrentOption().text end)
@@ -84,6 +84,78 @@ local function onOff(t)
   return nil
 end
 
+-- where the character is in its route, from the label of each route part: the player names the labels, and each
+-- role takes a comma list of names (Clients → Module on the website)
+local ROLES = { 'refill', 'hunt', 'check', 'leave' }
+local LEG = { refill = 'town', hunt = 'hunting', check = 'at_check', leave = 'leaving' }
+local PARKED_SQM = 8
+
+local function xyz(value)
+  local x, y, z = tostring(value):match('^%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)')
+  return tonumber(x), tonumber(y), tonumber(z)
+end
+
+local function roleNames()
+  local vw = modules.voidwatch and modules.voidwatch.Voidwatch
+  local given = vw and vw.labelRoles and vw.labelRoles() or {}
+  local out = {}
+  for _, role in ipairs(ROLES) do
+    out[role] = {}
+    for name in tostring(type(given[role]) == 'string' and given[role] ~= '' and given[role] or role):gmatch('[^,]+') do
+      out[role][name:match('^%s*(.-)%s*$'):lower()] = true
+    end
+  end
+  return out
+end
+
+local spot = { at = -1 }
+local function whereInRoute()
+  if spot.at == now then return spot end
+  spot = { at = now }
+  local list = type(CaveBot) == 'table' and CaveBot.actionList
+  if not list then return spot end
+  local names, marks, children = roleNames(), {}, list:getChildren()
+  for index, child in ipairs(children) do
+    if child.action == 'label' then
+      local v = tostring(child.value):lower()
+      for role, set in pairs(names) do
+        if set[v] and not marks[role] then marks[role] = index end
+      end
+    end
+  end
+  local missing = {}
+  for _, role in ipairs(ROLES) do
+    if not marks[role] then missing[#missing + 1] = role end
+  end
+  spot.missing = #missing > 0 and missing or nil
+  if spot.missing then spot.phase = 'unknown'; return spot end
+  if onOff(CaveBot) == false then
+    local p = g_game.getLocalPlayer()
+    local pos = p and p:getPosition()
+    local okPz, pz = pcall(function() return p:hasState(PlayerStates.Pz) end)
+    local near = false
+    for i = marks.refill + 1, #children do
+      if children[i].action == 'goto' then
+        local x, y, z = xyz(children[i].value)
+        near = pos and x and pos.z == z and math.max(math.abs(pos.x - x), math.abs(pos.y - y)) <= PARKED_SQM or false
+        break
+      end
+    end
+    spot.phase = (near or (okPz and pz)) and 'parked' or 'stopped'
+    return spot
+  end
+  local cur = list:getFocusedChild()
+  local at = cur and list:getChildIndex(cur)
+  if not at then spot.phase = 'unknown'; return spot end
+  local leg, legAt, last, lastAt = nil, 0, nil, 0
+  for role, index in pairs(marks) do
+    if index <= at and index > legAt then leg, legAt = role, index end
+    if index > lastAt then last, lastAt = role, index end
+  end
+  spot.phase = LEG[leg or last]
+  return spot
+end
+
 local function switch(t, name, on)
   if type(on) ~= 'boolean' then return false, 'on must be true or false' end
   local set = fn(t, on and 'setOn' or 'setOff')
@@ -129,6 +201,8 @@ local adapter = {
     route = function() local get = fn(CaveBot, 'getCurrentProfile'); return (get and get()) or selected('cavebot_configs') end,
     routes = routes,
     label = label,
+    phase = function() return whereInRoute().phase end,
+    labelsMissing = function() return whereInRoute().missing end,
     targetOn = function() return onOff(TargetBot) end,
     targetProfile = function() local get = fn(TargetBot, 'getCurrentProfile'); return (get and get()) or selected('targetbot_configs') end,
     botProfile = botProfile,
