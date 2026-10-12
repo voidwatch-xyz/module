@@ -278,6 +278,12 @@ while [ -d "$DIR" ]; do
     rm -f "$OUT/.results" "$OUT/.result"
   fi
 
+  if [ -f "$OUT/exiva.json" ]; then
+    mv -f "$OUT/exiva.json" "$OUT/.exiva"
+    request POST /exiva -m 10 -H "Content-Type: application/json" --data-binary "@$OUT/.exiva" >/dev/null
+    rm -f "$OUT/.exiva"
+  fi
+
   # the client's own minimap files sit in the write folder. The clients there share them, so only the first paired
   # character sends them: each file after it changed, at most every 30 minutes, and all again when the site has no map.
   if [ "$minimap_on" = 1 ] && [ $((now - minimap_check)) -ge 60 ]; then

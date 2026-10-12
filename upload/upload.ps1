@@ -284,10 +284,16 @@ while (Test-Path $Dir) {
     if ((Test-Path "$Out\results.json") -and -not (Test-Path "$Out\.results")) { Move-Item -Force "$Out\results.json" "$Out\.results" }
     if (Test-Path "$Out\.results") {
       foreach ($res in (Get-Content "$Out\.results" -Raw | ConvertFrom-Json)) {
-        Put "$Out\.result" (@{ ok = $res.ok; message = $res.message } | ConvertTo-Json -Compress)
+        Put "$Out\.result" (@{ ok = $res.ok; message = $res.message; data = $res.data } | ConvertTo-Json -Compress -Depth 4)
         Call 'Post' "/commands/$($res.id)/result" "$Out\.result" 'application/json' 10 | Out-Null
       }
       Remove-Item -Force -ErrorAction SilentlyContinue "$Out\.results", "$Out\.result"
+    }
+
+    if (Test-Path "$Out\exiva.json") {
+      Move-Item -Force "$Out\exiva.json" "$Out\.exiva"
+      Call 'Post' '/exiva' "$Out\.exiva" 'application/json' 10 | Out-Null
+      Remove-Item -Force -ErrorAction SilentlyContinue "$Out\.exiva"
     }
 
     # the client's own minimap files sit in the write folder. The clients there share them, so only the first paired
