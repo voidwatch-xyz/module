@@ -11,6 +11,7 @@
 --   inbox/pair.json             the pairing code and link to show the player, or paired: true
 --   inbox/commands.json         commands to run
 --   plan.json                   the bot's running plan, so a bot reload keeps it; removed at logout
+--   outbox/exiva.json           the player's own exiva cast and its answer, which starts a team exiva
 -- Everything the stock client knows, the module reads itself. The rest comes from adapters (/developers/new-server):
 --   Voidwatch.register(adapter)    a server adapter in this module, for example orion.lua; it runs only on its server
 --   Voidwatch.attachBot(adapter)   the bot adapter, a script in the bot's config folder; it attaches every 10 s
@@ -22,7 +23,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.8.0'
+local MODULE = 'voidwatch-feed/0.9.0'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -214,7 +215,67 @@ local function onUse(text)
 end
 
 -- "Loot of a dragon: 2 dragon hams, 43 gold coins." is what the corpse held; every server sends it
+-- exiva: the player's own cast starts a team exiva on the website, and a cast the website asks for answers it. The answer is
+-- the game message that follows the cast, in the words of TFS (spells.cpp, SearchPlayer).
+local EXIVA_GAP_MS = 10000
+local EXIVA_ANSWER_MS = 3000
+local EXIVA_MANA = 20
+local EXIVA_DIRS = { north = 'north', south = 'south', east = 'east', west = 'west', ['north-east'] = 'north-east',
+  ['north-west'] = 'north-west', ['south-east'] = 'south-east', ['south-west'] = 'south-west', northeast = 'north-east',
+  northwest = 'north-west', southeast = 'south-east', southwest = 'south-west' }
+local EXIVA_PATTERNS = {
+  { '^(.-) is standing next to you%.?$', 'beside', 'same' }, { '^(.-) is above you%.?$', 'beside', 'higher' },
+  { '^(.-) is below you%.?$', 'beside', 'lower' }, { '^(.-) is on a higher level to the ([%a%-]+)%.?$', 'close', 'higher' },
+  { '^(.-) is on a lower level to the ([%a%-]+)%.?$', 'close', 'lower' }, { '^(.-) is very far to the ([%a%-]+)%.?$', 'veryfar', 'unknown' },
+  { '^(.-) is far to the ([%a%-]+)%.?$', 'far', 'unknown' }, { '^(.-) is to the ([%a%-]+)%.?$', 'close', 'same' },
+}
+local exiva = { last = -math.huge }
+local addResults   -- below, with the commands
+
+local function exivaAnswer(text)
+  for _, p in ipairs(EXIVA_PATTERNS) do
+    local name, word = text:match(p[1])
+    if name then
+      local dir = word and EXIVA_DIRS[word:lower()]
+      if word and not dir then return nil end
+      return { name = name, band = p[2], level = p[3], dir = dir }
+    end
+  end
+end
+
+local function exivaMessage(text)
+  local p = exiva.pending
+  if not p or not me.dir or g_clock.millis() - p.t > EXIVA_ANSWER_MS then return end
+  if text:find('^A player with this name is not online') then
+    exiva.pending = nil
+    if p.team then addResults({ { id = p.id, ok = false, message = 'not online' } }) end
+    return
+  end
+  local a = exivaAnswer(text)
+  if not a then return end
+  local n = a.name:lower()
+  if n:sub(1, #p.target) ~= p.target and p.target:sub(1, #n) ~= n then return end
+  exiva.pending = nil
+  if p.team then
+    addResults({ { id = p.id, ok = true, message = text, data = { x = p.pos.x, y = p.pos.y, z = p.pos.z, band = a.band, dir = a.dir, level = a.level } } })
+  elseif me.settings and me.settings.exiva then
+    write(me.dir .. '/outbox/exiva.json', json.encode({ target = a.name, pos = p.pos, band = a.band, dir = a.dir, level = a.level, text = text }))
+  end
+end
+
+local function onTalk(name, level, mode, text, channelId, pos)
+  local p = alive and not halted and g_game.getLocalPlayer()
+  if not p or name ~= p:getName() or type(text) ~= 'string' then return end
+  local who = text:match('^[Ee]xiva%s+"?(.-)"?%s*$')
+  if not who or who == '' then return end
+  if exiva.pending and exiva.pending.team and exiva.pending.target == who:lower() then return end
+  local at = pos or p:getPosition()
+  exiva.pending = { target = who:lower(), pos = { x = at.x, y = at.y, z = at.z }, t = g_clock.millis() }
+  exiva.last = g_clock.millis()
+end
+
 local function onTextMessage(mode, text)
+  if alive and not halted and type(text) == 'string' then exivaMessage(text) end
   if not alive or halted or not ledger or type(text) ~= 'string' then return end
   if onUse(text) then return end
   local body = text:match('^Loot of [^:]+:%s*(.+)$')
@@ -604,7 +665,7 @@ local function inboxFiles()
   return files
 end
 
-local function addResults(results)
+function addResults(results)
   local path = me.dir .. '/outbox/results.json'
   local ok, old = pcall(json.decode, read(path) or '[]')
   local all = ok and type(old) == 'table' and old or {}
@@ -624,7 +685,7 @@ local function runCommands()
       if id and not ran[id] then
         ran[id], ranOrder[#ranOrder + 1] = true, id
         if #ranOrder > 200 then ran[table.remove(ranOrder, 1)] = nil end
-        local done, message = false, 'not supported on this client'
+        local done, message, later = false, 'not supported on this client', false
         if serverNow() - (tonumber(c.createdAt) or 0) > COMMAND_TTL then
           message = 'too old: sent more than a minute ago'
         elseif me.settings and me.settings.commands == false then
@@ -633,10 +694,10 @@ local function runCommands()
           local fn = action(c.action)
           if fn then
             local okRun, res, msg = pcall(fn, type(c.args) == 'table' and c.args or {}, { id = id })
-            done, message = okRun and res ~= false, okRun and msg or tostring(res)
+            done, message, later = okRun and res ~= false, okRun and msg or tostring(res), okRun and res == 'pending'
           end
         end
-        results[#results + 1] = { id = id, ok = done, message = message and tostring(message):sub(1, 200) or nil }
+        if not later then results[#results + 1] = { id = id, ok = done, message = message and tostring(message):sub(1, 200) or nil } end
       end
     end
   end
@@ -667,6 +728,11 @@ local function step()
     ledgerDirty = true
   end
   me.lastTick = now0
+  if exiva.pending and now0 - exiva.pending.t > EXIVA_ANSWER_MS then
+    local p = exiva.pending
+    exiva.pending = nil
+    if p.team then addResults({ { id = p.id, ok = false, message = 'no answer from the game' } }) end
+  end
   flushLedger(false)
   local paired = pairing(name)
   -- the reply carries the server time, so a new text means the upload script got an answer just now
@@ -730,6 +796,37 @@ Voidwatch.actions.reset_loot = function()
   if not ledger then return false, 'not logged in' end
   Voidwatch.resetLoot()
   return true, 'loot, supplies and time reset'
+end
+-- a team cast: at once, also in a fight, but not below half HP, since a spell can hold back a heal for a second
+Voidwatch.actions.cast_exiva = function(args, ctx)
+  local p = g_game.getLocalPlayer()
+  local target = type(args.target) == 'string' and args.target or ''
+  if not p then return false, 'not logged in' end
+  if not (me.settings and me.settings.exiva) then return false, 'Team exiva is off for this client' end
+  if target == '' or #target > 30 or target:find('["\r\n]') then return false, 'no valid target' end
+  if p:getHealth() < p:getMaxHealth() * 0.5 then return false, 'HP below 50%' end
+  if p:getMana() < EXIVA_MANA then return false, 'not enough mana' end
+  local now = g_clock.millis()
+  if exiva.pending then return false, 'another exiva waits for its answer' end
+  if now - exiva.last < EXIVA_GAP_MS then return false, 'cast less than 10 s ago' end
+  local at = p:getPosition()
+  exiva.pending = { id = ctx and ctx.id, team = true, target = target:lower(), pos = { x = at.x, y = at.y, z = at.z }, t = now }
+  exiva.last = now
+  say(('exiva on %s for %s.'):format(target, tostring(args.by or 'your team')))
+  g_game.talk('exiva "' .. target .. '"')
+  return 'pending'
+end
+Voidwatch.actions.exiva_show = function(args)
+  local target = tostring(args.target or '?')
+  local x, y = tonumber(args.x), tonumber(args.y)
+  if not x or not y then
+    say(('exiva %s: the answers do not overlap. Cast again from another spot.'):format(target))
+    return true, 'no area'
+  end
+  local zmin, zmax = tonumber(args.zmin), tonumber(args.zmax)
+  local floor = not zmin and 'floor unknown' or zmin == zmax and ('floor ' .. zmin) or ('floor ' .. zmin .. ' to ' .. zmax)
+  say(('exiva %s: around %d, %d, %s, within %d sqm, %d answers.'):format(target, x, y, floor, tonumber(args.radius) or 0, tonumber(args.answers) or 0))
+  return true, 'shown'
 end
 Voidwatch.actions.logout_in_pz = function()
   local p = g_game.getLocalPlayer()
@@ -836,7 +933,7 @@ end
 function Voidwatch.init()
   alive, halted, loops, errors, lastError, me, bot = true, nil, 0, 0, nil, {}, nil
   ledger, ledgerDirty, prices = nil, false, nil
-  connect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd })
+  connect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd, onTalk = onTalk })
   baseKB = collectgarbage('count')
   heap = { baseKB }
   loopEvent = scheduleEvent(tick, LOOP_MS)
@@ -848,7 +945,7 @@ function Voidwatch.terminate()
   alive = false
   if Voidwatch.ui and Voidwatch.ui.terminate then pcall(Voidwatch.ui.terminate) end
   stopAdapters()
-  disconnect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd })
+  disconnect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd, onTalk = onTalk })
   flushLedger(true)
   if loopEvent then removeEvent(loopEvent) end
   loopEvent = nil
