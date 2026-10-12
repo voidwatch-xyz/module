@@ -23,7 +23,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.9.1'
+local MODULE = 'voidwatch-feed/0.9.2'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -217,7 +217,9 @@ end
 -- "Loot of a dragon: 2 dragon hams, 43 gold coins." is what the corpse held; every server sends it
 -- exiva: the player's own cast starts a team exiva on the website, and a cast the website asks for answers it. The answer is
 -- the game message that follows the cast, in the words of TFS (spells.cpp, SearchPlayer).
-local EXIVA_GAP_MS = 10000
+local EXIVA_GAP_MS = 5000
+local EXIVA_TRIES = 5
+local EXIVA_RETRY_MS = 400
 local EXIVA_ANSWER_MS = 3000
 local EXIVA_MANA = 20
 local EXIVA_DIRS = { north = 'north', south = 'south', east = 'east', west = 'west', ['north-east'] = 'north-east',
@@ -228,6 +230,13 @@ local EXIVA_PATTERNS = {
   { '^(.-) is below you%.?$', 'beside', 'lower' }, { '^(.-) is on a higher level to the ([%a%-]+)%.?$', 'close', 'higher' },
   { '^(.-) is on a lower level to the ([%a%-]+)%.?$', 'close', 'lower' }, { '^(.-) is very far to the ([%a%-]+)%.?$', 'veryfar', 'unknown' },
   { '^(.-) is far to the ([%a%-]+)%.?$', 'far', 'unknown' }, { '^(.-) is to the ([%a%-]+)%.?$', 'close', 'same' },
+}
+-- the game's answers that end a cast without a direction; "exhausted" is tried again, the bot's own spells hold the timer
+local EXIVA_REFUSALS = {
+  { '^A player with this name is not online', 'not online' }, { '^A player with this name does not exist', 'no such player' },
+  { '^Player name is ambiguous', 'name is ambiguous' }, { '^You do not have enough mana', 'not enough mana' },
+  { '^You need to learn this spell first', 'the character does not know exiva' }, { '^Your level is too low', 'level too low' },
+  { '^You are exhausted', 'exhausted' },
 }
 local exiva = { last = -math.huge }
 local addResults   -- below, with the commands
@@ -243,17 +252,41 @@ local function exivaAnswer(text)
   end
 end
 
+local function exivaCast(p)
+  if exiva.pending ~= p then return end
+  local pl = g_game.getLocalPlayer()
+  if not pl or pl:getHealth() < pl:getMaxHealth() * 0.5 then
+    exiva.pending = nil
+    return addResults({ { id = p.id, ok = false, message = pl and 'HP below 50%' or 'not logged in' } })
+  end
+  p.tries, p.t, p.last = p.tries + 1, g_clock.millis(), nil
+  g_game.talk('exiva "' .. p.name .. '"')
+end
+
 local function exivaMessage(text)
   local p = exiva.pending
   if not p or not me.dir or g_clock.millis() - p.t > EXIVA_ANSWER_MS then return end
-  local refused = text:find('^A player with this name is not online') and 'not online' or text:find('^Player name is ambiguous') and 'name is ambiguous'
+  local refused
+  for _, r in ipairs(EXIVA_REFUSALS) do
+    if text:find(r[1]) then refused = r[2] break end
+  end
+  if refused == 'exhausted' and p.team and p.tries < EXIVA_TRIES then
+    p.t = g_clock.millis()
+    scheduleEvent(function() exivaCast(p) end, EXIVA_RETRY_MS)
+    return
+  end
   if refused then
     exiva.pending = nil
-    if p.team then addResults({ { id = p.id, ok = false, message = refused } }) end
+    if p.team then
+      addResults({ { id = p.id, ok = false, message = refused == 'exhausted' and ('exhausted after ' .. p.tries .. ' tries') or refused } })
+    end
     return
   end
   local a = exivaAnswer(text)
-  if not a then return end
+  if not a then
+    if #text <= 100 and not text:find('^Loot of') and not text:find('^Using ') then p.last = text end
+    return
+  end
   local n, want = a.name:lower(), p.target:gsub('~$', '')
   if n:sub(1, #want) ~= want and want:sub(1, #n) ~= n then return end
   exiva.pending = nil
@@ -732,7 +765,9 @@ local function step()
   if exiva.pending and now0 - exiva.pending.t > EXIVA_ANSWER_MS then
     local p = exiva.pending
     exiva.pending = nil
-    if p.team then addResults({ { id = p.id, ok = false, message = 'no answer from the game' } }) end
+    if p.team then
+      addResults({ { id = p.id, ok = false, message = p.last and ('no answer, the game said: ' .. p.last) or 'no answer from the game' } })
+    end
   end
   flushLedger(false)
   local paired = pairing(name)
@@ -809,19 +844,19 @@ Voidwatch.actions.cast_exiva = function(args, ctx)
   if p:getMana() < EXIVA_MANA then return false, 'not enough mana' end
   local now = g_clock.millis()
   if exiva.pending then return false, 'another exiva waits for its answer' end
-  if now - exiva.last < EXIVA_GAP_MS then return false, 'cast less than 10 s ago' end
+  if now - exiva.last < EXIVA_GAP_MS then return false, 'cast less than 5 s ago' end
   local at = p:getPosition()
-  exiva.pending = { id = ctx and ctx.id, team = true, target = target:lower(), pos = { x = at.x, y = at.y, z = at.z }, t = now }
-  exiva.last = now
+  local cast = { id = ctx and ctx.id, team = true, name = target, target = target:lower(), pos = { x = at.x, y = at.y, z = at.z }, t = now, tries = 0 }
+  exiva.pending, exiva.last = cast, now
   say(('exiva on %s for %s.'):format(target, tostring(args.by or 'your team')))
-  g_game.talk('exiva "' .. target .. '"')
+  exivaCast(cast)
   return 'pending'
 end
 Voidwatch.actions.exiva_show = function(args)
   local target = tostring(args.target or '?')
   local x, y = tonumber(args.x), tonumber(args.y)
   if not x or not y then
-    say(('exiva %s: the answers do not overlap. Cast again from another spot.'):format(target))
+    say(('exiva %s: no answer came back%s.'):format(target, args.why and (', ' .. tostring(args.why)) or ''))
     return true, 'no area'
   end
   local zmin, zmax = tonumber(args.zmin), tonumber(args.zmax)
