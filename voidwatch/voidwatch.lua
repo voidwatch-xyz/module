@@ -23,7 +23,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.9.0'
+local MODULE = 'voidwatch-feed/0.9.1'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -246,15 +246,16 @@ end
 local function exivaMessage(text)
   local p = exiva.pending
   if not p or not me.dir or g_clock.millis() - p.t > EXIVA_ANSWER_MS then return end
-  if text:find('^A player with this name is not online') then
+  local refused = text:find('^A player with this name is not online') and 'not online' or text:find('^Player name is ambiguous') and 'name is ambiguous'
+  if refused then
     exiva.pending = nil
-    if p.team then addResults({ { id = p.id, ok = false, message = 'not online' } }) end
+    if p.team then addResults({ { id = p.id, ok = false, message = refused } }) end
     return
   end
   local a = exivaAnswer(text)
   if not a then return end
-  local n = a.name:lower()
-  if n:sub(1, #p.target) ~= p.target and p.target:sub(1, #n) ~= n then return end
+  local n, want = a.name:lower(), p.target:gsub('~$', '')
+  if n:sub(1, #want) ~= want and want:sub(1, #n) ~= n then return end
   exiva.pending = nil
   if p.team then
     addResults({ { id = p.id, ok = true, message = text, data = { x = p.pos.x, y = p.pos.y, z = p.pos.z, band = a.band, dir = a.dir, level = a.level } } })
@@ -825,7 +826,9 @@ Voidwatch.actions.exiva_show = function(args)
   end
   local zmin, zmax = tonumber(args.zmin), tonumber(args.zmax)
   local floor = not zmin and 'floor unknown' or zmin == zmax and ('floor ' .. zmin) or ('floor ' .. zmin .. ' to ' .. zmax)
-  say(('exiva %s: around %d, %d, %s, within %d sqm, %d answers.'):format(target, x, y, floor, tonumber(args.radius) or 0, tonumber(args.answers) or 0))
+  local n, agree, more = tonumber(args.answers) or 0, tonumber(args.agree), (tonumber(args.areas) or 1) - 1
+  say(('exiva %s: around %d, %d, %s, within %d sqm, %s%s.'):format(target, x, y, floor, tonumber(args.radius) or 0,
+    agree and agree < n and ('%d of %d answers agree'):format(agree, n) or ('answers: %d'):format(n), more == 1 and ', 1 more area' or more > 1 and (', %d more areas'):format(more) or ''))
   return true, 'shown'
 end
 Voidwatch.actions.logout_in_pz = function()
