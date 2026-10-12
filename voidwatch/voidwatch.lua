@@ -10,6 +10,7 @@
 --   inbox/reply.json            the last answer to status: statusEvery, captureEvery, commands, settings
 --   inbox/pair.json             the pairing code and link to show the player, or paired: true
 --   inbox/commands.json         commands to run
+--   plan.json                   the bot's running plan, so a bot reload keeps it; removed at logout
 -- Everything the stock client knows, the module reads itself. The rest comes from adapters (/developers/new-server):
 --   Voidwatch.register(adapter)    a server adapter in this module, for example orion.lua; it runs only on its server
 --   Voidwatch.attachBot(adapter)   the bot adapter, a script in the bot's config folder; it attaches every 10 s
@@ -21,7 +22,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.7.4'
+local MODULE = 'voidwatch-feed/0.8.0'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -51,7 +52,7 @@ local SKULLS = { [SkullWhite or 3] = 'white', [SkullRed or 4] = 'red', [SkullBla
                  [SkullGreen or 2] = 'green', [SkullOrange or 6] = 'orange' }
 
 -- the status fields an adapter may fill; anything else it returns is ignored
-local FIELDS = { 'server', 'vocation', 'expPerHour', 'route', 'routeOn', 'label', 'phase', 'labelsMissing', 'routes', 'targetOn', 'botConfig',
+local FIELDS = { 'server', 'vocation', 'expPerHour', 'route', 'routeOn', 'label', 'phase', 'labelsMissing', 'plan', 'routes', 'targetOn', 'botConfig',
                  'targetProfile', 'botProfile', 'supplies', 'tasks', 'taskPoints', 'taskWeek', 'loot', 'lootHours',
                  'lootSource', 'blessed', 'redemption', 'redemptionLeft' }
 
@@ -631,7 +632,7 @@ local function runCommands()
         else
           local fn = action(c.action)
           if fn then
-            local okRun, res, msg = pcall(fn, type(c.args) == 'table' and c.args or {})
+            local okRun, res, msg = pcall(fn, type(c.args) == 'table' and c.args or {}, { id = id })
             done, message = okRun and res ~= false, okRun and msg or tostring(res)
           end
         end
@@ -797,6 +798,33 @@ function Voidwatch.labelRoles()
   return type(me.settings) == 'table' and type(me.settings.labels) == 'table' and me.settings.labels or {}
 end
 
+function Voidwatch.planWait()
+  local m = type(me.settings) == 'table' and tonumber(me.settings.planWait)
+  return m and math.max(5, math.min(120, math.floor(m))) or 20
+end
+
+-- false: no character yet, so the bot asks again
+function Voidwatch.loadPlan()
+  if not me.dir then return false end
+  return readJson(me.dir .. '/plan.json')
+end
+
+function Voidwatch.savePlan(plan)
+  if not me.dir then return false end
+  if plan == nil then return pcall(g_resources.deleteFile, me.dir .. '/plan.json') end
+  return write(me.dir .. '/plan.json', json.encode(plan))
+end
+
+function Voidwatch.cancelPlan()
+  local fn = action('cancel_plan')
+  if fn then return fn({}) end
+  return false
+end
+
+local function onGameEnd()
+  if me.dir then pcall(g_resources.deleteFile, me.dir .. '/plan.json') end
+end
+
 function Voidwatch.attachBot(def)
   if type(def) ~= 'table' then return false end
   if bot and bot.def == def then bot.at = g_clock.millis(); return true end
@@ -808,7 +836,7 @@ end
 function Voidwatch.init()
   alive, halted, loops, errors, lastError, me, bot = true, nil, 0, 0, nil, {}, nil
   ledger, ledgerDirty, prices = nil, false, nil
-  connect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade })
+  connect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd })
   baseKB = collectgarbage('count')
   heap = { baseKB }
   loopEvent = scheduleEvent(tick, LOOP_MS)
@@ -820,7 +848,7 @@ function Voidwatch.terminate()
   alive = false
   if Voidwatch.ui and Voidwatch.ui.terminate then pcall(Voidwatch.ui.terminate) end
   stopAdapters()
-  disconnect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade })
+  disconnect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd })
   flushLedger(true)
   if loopEvent then removeEvent(loopEvent) end
   loopEvent = nil
@@ -988,6 +1016,7 @@ function Voidwatch.view()
     captures = CAPTURES and settings.captures ~= false, supplyList = settings.supplyList ~= false,
     suppliesSource = me.last and me.last.suppliesSource or nil, commands = COMMANDS,
     routeName = me.last and me.last.route or nil, phase = me.last and me.last.phase or nil, labelsMissing = me.last and me.last.labelsMissing or nil,
+    plan = p and field('plan') or nil,
     heapMB = math.floor(collectgarbage('count') / 1024), clientMB = okMem and type(bytes) == 'number' and mb(bytes) or nil,
     errors = errors, lastError = lastError, sources = sources(), dir = g_resources.getWriteDir() .. ROOT:sub(2),
     update = {

@@ -101,7 +101,9 @@ local function build(v)
   if v.state == 'connected' then
     refs.upload = line(body, 'Upload script')
     refs.sending = line(body, 'Sending', 'The site sets the pace: faster while someone has the dashboard open.')
-    refs.route = line(body, 'Route', 'Where the character is in its route, from the route labels refill, hunt, check and leave.')
+    refs.route = line(body, 'Route', 'Where the character is in its route, from the route labels hunt, refill, city and resp.')
+    refs.plan = line(body, 'Plan', 'A command that waits for a label of the route: force refill, stop in depot or switch route.')
+    if v.plan and v.plan.state == 'running' then buttons(body, 'Cancel the plan', Voidwatch.cancelPlan) end
     refs.memory = line(body, 'Memory')
     refs.errors = line(body, 'Errors')
     stopButtons(body)
@@ -182,6 +184,16 @@ end
 local PHASES = { hunting = 'hunting', to_city = 'to city', in_city = 'in city', to_resp = 'to resp', parked = 'parked',
                  stopped = 'stopped', unknown = 'no route labels', town = 'in town', at_check = 'at check', leaving = 'leaving' }
 
+local PLAN_KINDS = { refill = 'Force refill', go_depot = 'Stop in depot', load_route = 'Switch route' }
+local PLAN_ENDS = { done = 'done', stuck = 'stuck', cancelled = 'cancelled', taken_over = 'taken over', failed = 'failed' }
+
+local function planText(pl)
+  local what = (PLAN_KINDS[pl.kind] or tostring(pl.kind)) .. (pl.route and (' to ' .. short(pl.route, 14)) or '')
+  if pl.state ~= 'running' then return (PLAN_ENDS[pl.state] or tostring(pl.state)) .. ': ' .. short(pl.message, 30) end
+  local left = tonumber(pl['until']) and math.max(0, math.ceil((pl['until'] - os.time()) / 60))
+  return what .. ' - ' .. tostring(pl.message or '') .. (left and (' (' .. left .. ' min left)') or '')
+end
+
 local function fill(v)
   refs.who:setText((v.character or 'Not logged in') .. (v.server and (' - ' .. v.server) or ''))
   refs.state.dot:setBackgroundColor(COLOURS[v.state] or '#777777')
@@ -202,6 +214,10 @@ local function fill(v)
     local text = v.phase and PHASES[v.phase] or 'no bot data'
     if v.phase == 'unknown' and v.labelsMissing then text = 'labels missing: ' .. table.concat(v.labelsMissing, ', ') end
     refs.route.value:setText(v.routeName and (short(v.routeName, 18) .. ' - ' .. text) or text)
+  end
+  if refs.plan then
+    refs.plan.value:setText(v.plan and planText(v.plan) or 'none')
+    refs.plan:setTooltip(v.plan and planText(v.plan) or 'A command that waits for a label of the route: force refill, stop in depot or switch route.')
   end
   if refs.memory then refs.memory.value:setText(('Lua %d MB, client %s MB'):format(v.heapMB, tostring(v.clientMB or '?'))) end
   if refs.errors then
@@ -259,7 +275,7 @@ local function refresh()
   if not win then return end
   local ok, v = pcall(Voidwatch.view)
   if ok and type(v) == 'table' then
-    local now = v.state .. '|' .. #v.sources .. '|' .. updateKey(v.update)
+    local now = v.state .. '|' .. #v.sources .. '|' .. updateKey(v.update) .. '|' .. tostring(v.plan and v.plan.state == 'running')
     if now ~= shape then
       shape = now
       build(v)
