@@ -4,6 +4,7 @@
 local SHOW_MS = 180000
 local FADE_EVERY_MS = 10000
 local MAX_SIDE = 256
+local OUTLINE_SQM = 1500
 local MAX_SHOWN = 3
 local PALETTE = { { 0, 0, 0, 0 }, { 255, 196, 0, 105 }, { 255, 214, 70, 235 } }
 
@@ -84,7 +85,8 @@ local function base64(s)
   return concat(out)
 end
 
--- the rows as an image: one pixel per cell, or per square of cells for a big area; the pixels at the edge are brighter
+-- the rows as an image: one pixel per cell, or per square of cells for a big area; the pixels at the edge are brighter,
+-- and an area wider than OUTLINE_SQM keeps only its edge, so it does not cover the map
 local function paint(area)
   local step = tonumber(area.step) or 1
   local minx, maxx, miny, maxy = math.huge, -math.huge, math.huge, -math.huge
@@ -94,6 +96,7 @@ local function paint(area)
   end
   local cols, lines = floor((maxx - minx) / step) + 1, floor((maxy - miny) / step) + 1
   local k = math.max(1, math.ceil(math.max(cols, lines) / MAX_SIDE))
+  local outline = math.max(cols, lines) * step > OUTLINE_SQM
   local w, h = math.ceil(cols / k), math.ceil(lines / k)
   local grid = {}
   for _, r in ipairs(area.rows) do
@@ -108,7 +111,7 @@ local function paint(area)
         px[#px + 1] = '\0'
       else
         local edge = x == 0 or y == 0 or x == w - 1 or y == h - 1 or not grid[i - 1] or not grid[i + 1] or not grid[i - w] or not grid[i + w]
-        px[#px + 1] = edge and '\2' or '\1'
+        px[#px + 1] = edge and '\2' or outline and '\0' or '\1'
       end
     end
   end
