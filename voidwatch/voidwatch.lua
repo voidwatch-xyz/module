@@ -24,7 +24,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.10.1'
+local MODULE = 'voidwatch-feed/0.10.2'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -1003,6 +1003,10 @@ end
 Voidwatch.actions.exiva_show = function(args)
   emitAddons('exiva', args)
   local target = tostring(args.target or '?')
+  if args.partial then
+    if args.first then say(('exiva %s: first area from %d answers, more coming.'):format(target, tonumber(args.answers) or 0)) end
+    return true, 'updated'
+  end
   local x, y = tonumber(args.x), tonumber(args.y)
   if not x or not y then
     say(('exiva %s: no answer came back%s.'):format(target, args.why and (', ' .. tostring(args.why)) or ''))
