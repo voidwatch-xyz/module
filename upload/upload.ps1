@@ -198,7 +198,7 @@ $Parent = Split-Path $Dir; $SentMaps = Join-Path $Parent '.minimap-sent.d'; $Map
 $WriteDir = if ($Parent -match '[\\/]_voidwatch[\\/]data$') { Split-Path (Split-Path (Split-Path $Parent)) } else { Split-Path $Parent }
 New-Item -ItemType Directory -Force -Path $In | Out-Null
 $lastSent = $null; $lastCapture = $null; $minimapCheck = [datetime]::MinValue
-$statusEvery = 30; $minimapOn = $true; $needMap = $false; $refused = 0; $wake = $false; $said = ''
+$statusEvery = 30; $minimapOn = $true; $needMap = $false; $refused = 0; $wake = $false; $said = ''; $wakeCheck = [datetime]::MinValue
 
 # one line per change of state, never the token or the code
 function Note($text) {
@@ -370,7 +370,15 @@ while (Test-Path $Dir) {
       }
     }
 
-    if ($statusEvery -le 2) {
+    if ($age -le 300 -and "$(Get-Content "$In\reply.json" -Raw -ErrorAction SilentlyContinue)" -match '"exiva":true') {
+      # Team exiva: a long poll would hold the team's casts and answers, so ask briefly every 2 s instead
+      Start-Sleep -Seconds 1
+      if (($now - $wakeCheck).TotalSeconds -ge 2) {
+        $wakeCheck = $now
+        $w = Call 'Get' '/wake' $null $null 5
+        if ($w.code -eq 200 -and $w.body -match '"wake":true') { $wake = $true }
+      }
+    } elseif ($statusEvery -le 2) {
       Start-Sleep -Milliseconds 500
     } elseif ($age -gt 300) {
       Start-Sleep -Seconds 10  # the client is closed or logged out: no request stays open

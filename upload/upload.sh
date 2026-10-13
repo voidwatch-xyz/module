@@ -179,7 +179,7 @@ case "$DIR" in
   *) WRITE_DIR="$DIR/../.." ;;
 esac
 mkdir -p "$IN"
-last_sent=0 minimap_check=0 status_every=30 refused=0 minimap_on=1 need_map=0 wake=0 said="" fetched=0
+last_sent=0 minimap_check=0 status_every=30 refused=0 minimap_on=1 need_map=0 wake=0 said="" fetched=0 wake_check=0
 # a game client that runs through Wine reports Windows: the website takes the system from here
 case $(uname -s 2>/dev/null) in
   Darwin) host_os=macOS ;;
@@ -347,7 +347,14 @@ while [ -d "$DIR" ]; do
     fi
   fi
 
-  if [ "$status_every" -le 2 ]; then
+  if [ "$age" -le 300 ] && grep -q '"exiva":true' "$IN/reply.json" 2>/dev/null; then
+    # Team exiva: a long poll would hold the team's casts and answers, so ask briefly every 2 s instead
+    sleep 1
+    if [ $((now - wake_check)) -ge 2 ]; then
+      wake_check=$now
+      [ "$(request GET /wake -m 5)" = 200 ] && grep -q '"wake":true' "$BODY" && wake=1
+    fi
+  elif [ "$status_every" -le 2 ]; then
     sleep 0.5
   elif [ "$age" -gt 300 ]; then
     sleep 10 # the client is closed or logged out: no request stays open
