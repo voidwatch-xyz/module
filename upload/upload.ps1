@@ -78,6 +78,48 @@ if (-not $Worker) {
     }
     Update-Done $d @{ ok = $true; version = $v; from = $old; by = $by; at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
   }
+  # addons come from the release of the module version the folder runs, checked against the same SHA256SUMS. A failed
+  # download waits 30 minutes or a new module version before it tries again.
+  function Install-Addon($d, $id, $v) {
+    $t = Join-Path $d '.addon'; $dir = Join-Path $d 'addons'
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $t
+    New-Item -ItemType Directory -Force -Path $t, $dir | Out-Null
+    try {
+      Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri "$Releases/download/v$v/addon-$id.zip" -OutFile (Join-Path $t 'a.zip')
+      Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri "$Releases/download/v$v/SHA256SUMS" -OutFile (Join-Path $t 'SHA256SUMS')
+      $line = Select-String -Path (Join-Path $t 'SHA256SUMS') -Pattern ('^([0-9a-f]{64})\s+addon-' + [regex]::Escape($id) + '\.zip$') | Select-Object -First 1
+      $want = if ($line) { $line.Matches[0].Groups[1].Value } else { '' }
+      $got = (Get-FileHash -Algorithm SHA256 (Join-Path $t 'a.zip')).Hash.ToLower()
+      if ($want -and $want -eq $got) {
+        Expand-Archive -Path (Join-Path $t 'a.zip') -DestinationPath (Join-Path $t 'x') -Force
+        if (Test-Path (Join-Path $t "x\$id\main.lua")) {
+          [IO.File]::WriteAllText((Join-Path $t "x\$id\.version"), $v)
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $dir $id)
+          Move-Item (Join-Path $t "x\$id") (Join-Path $dir $id)
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $t, (Join-Path $dir ".failed-$id")
+          return
+        }
+      }
+    } catch { }
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $t
+    [IO.File]::WriteAllText((Join-Path $dir ".failed-$id"), $v)
+  }
+  function Sync-Addons($d) {
+    $v = Version-Of (Join-Path (Module-Of $d) 'voidwatch.otmod')
+    $w = Get-Content (Join-Path $d 'addons-wanted.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+    $wanted = @($w.ids | Where-Object { $_ -match '^[a-z0-9-]+$' })
+    $dir = Join-Path $d 'addons'
+    foreach ($id in $wanted) {
+      $have = Get-Content (Join-Path $dir "$id\.version") -Raw -ErrorAction SilentlyContinue
+      if ($have -and $have.Trim() -eq $v) { continue }
+      $f = Get-Item (Join-Path $dir ".failed-$id") -ErrorAction SilentlyContinue
+      if ($f -and (Get-Content $f.FullName -Raw).Trim() -eq $v -and ((Get-Date) - $f.LastWriteTime).TotalSeconds -lt 1800) { continue }
+      Install-Addon $d $id $v
+    }
+    foreach ($p in (Get-ChildItem -Directory $dir -ErrorAction SilentlyContinue)) {
+      if ($wanted -notcontains $p.Name) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $p.FullName }
+    }
+  }
   function Rollback-Module($d) {
     $m = Module-Of $d; $b = Join-Path $d 'backup'
     $req = Get-Content (Join-Path $d 'rollback-request.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
@@ -128,6 +170,7 @@ if (-not $Worker) {
       Write-Text (Join-Path $d 'latest.json') (@{ latest = $best; updatable = $writable; backup = if ($backup) { $backup.Trim() } else { '' } } | ConvertTo-Json -Compress)
       if ($writable -and (Test-Path (Join-Path $d 'update-request.json'))) { Update-Module $d }
       if ($writable -and (Test-Path (Join-Path $d 'rollback-request.json'))) { Rollback-Module $d }
+      if (Test-Path (Join-Path $d 'addons-wanted.json')) { Sync-Addons $d }
     }
     if ($restartSelf) {
       # the new script takes over: the workers stop, and a new hidden main script starts them again

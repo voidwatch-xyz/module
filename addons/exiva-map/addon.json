@@ -1,0 +1,8 @@
+{
+  "id": "exiva-map",
+  "name": "Exiva map",
+  "plan": "free",
+  "minModule": "0.10.0",
+  "about": "Draws each team exiva result on your in-game minimap: the whole area where the target can be, from the answers of all your characters.",
+  "points": ["The whole area, also over land nobody has explored", "Drawn in memory, no files", "Fades after 3 minutes, up to 3 names at once"]
+}
