@@ -9,11 +9,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Pack the zip and the checksum
+      - name: Pack the zip, the addons and the checksums
+        id: pack
         run: |
           zip -r voidwatch-module.zip voidwatch upload setup-* remove-* README.txt LICENSE
-          sha256sum voidwatch-module.zip > SHA256SUMS
+          files="voidwatch-module.zip"
+          mkdir -p parts
+          for d in addons/*/; do
+            [ -f "${d}addon.json" ] || continue
+            id=$(basename "$d")
+            (cd addons && zip -qr "../addon-$id.zip" "$id")
+            jq --argjson size "$(stat -c %s "addon-$id.zip")" '. + {size: $size}' "${d}addon.json" > "parts/$id.json"
+            files="$files addon-$id.zip"
+          done
+          if ls parts/*.json > /dev/null 2>&1; then jq -s '.' parts/*.json > addons.json; else echo '[]' > addons.json; fi
+          sha256sum $files addons.json > SHA256SUMS
+          echo "files=$files addons.json SHA256SUMS" >> "$GITHUB_OUTPUT"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" voidwatch-module.zip SHA256SUMS --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" ${{ steps.pack.outputs.files }} --title "$GITHUB_REF_NAME" --generate-notes

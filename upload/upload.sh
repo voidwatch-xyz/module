@@ -75,6 +75,42 @@ if [ "${1:-}" != --worker ]; then
     esac
     update_done "$d" "{\"ok\":true,\"version\":\"$v\",\"from\":\"$old\",\"by\":\"$by\",\"at\":$(date +%s)}"
   }
+  # addons come from the release of the module version the folder runs, checked against the same SHA256SUMS. A failed
+  # download waits 30 minutes or a new module version before it tries again.
+  install_addon() {
+    d=${1%/} id=$2 v=$3 t="${1%/}/.addon"
+    rm -rf "$t" && mkdir -p "$t" "$d/addons" || return 1
+    if curl -sSfL -m 60 -o "$t/a.zip" "$RELEASES/download/v$v/addon-$id.zip" 2>/dev/null \
+      && curl -sSfL -m 30 -o "$t/SHA256SUMS" "$RELEASES/download/v$v/SHA256SUMS" 2>/dev/null; then
+      want=$(sed -n "s/^\([0-9a-f]\{64\}\)  *addon-$id\.zip\$/\1/p" "$t/SHA256SUMS" | head -n 1)
+      got=$({ shasum -a 256 "$t/a.zip" 2>/dev/null || sha256sum "$t/a.zip"; } | cut -d ' ' -f 1)
+      if [ -n "$want" ] && [ "$want" = "$got" ] && unzip -q "$t/a.zip" -d "$t/x" 2>/dev/null && [ -f "$t/x/$id/main.lua" ]; then
+        printf '%s' "$v" > "$t/x/$id/.version"
+        rm -rf "${d:?}/addons/$id" && mv "$t/x/$id" "$d/addons/$id" && rm -rf "$t" && rm -f "$d/addons/.failed-$id" && return 0
+      fi
+    fi
+    rm -rf "$t"
+    printf '%s' "$v" > "$d/addons/.failed-$id"
+    return 1
+  }
+  sync_addons() {
+    d=${1%/} v=$(version_of "$(module_of "$1")/voidwatch.otmod")
+    wanted=$(sed -n 's/.*"ids": *\[\([^]]*\)\].*/\1/p' "$d/addons-wanted.json" 2>/dev/null | tr -d '" ' | tr ',' ' ')
+    for id in $wanted; do
+      case "$id" in "" | *[!a-z0-9-]*) continue ;; esac
+      [ "$(cat "$d/addons/$id/.version" 2>/dev/null)" = "$v" ] && continue
+      f="$d/addons/.failed-$id"
+      if [ -f "$f" ] && [ "$(cat "$f")" = "$v" ] && [ $(($(date +%s) - $(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f"))) -lt 1800 ]; then
+        continue
+      fi
+      install_addon "$d" "$id" "$v"
+    done
+    for p in "$d"/addons/*/; do
+      [ -d "$p" ] || continue
+      id=$(basename "$p")
+      case " $wanted " in *" $id "*) ;; *) rm -rf "${d:?}/addons/$id" ;; esac
+    done
+  }
   rollback_module() {
     d=${1%/} m=$(module_of "$1")
     by=$(sed -n 's/.*"by": *"\([^"]*\)".*/\1/p' "$d/rollback-request.json" | head -n 1)
@@ -122,6 +158,7 @@ if [ "${1:-}" != --worker ]; then
       write_file "${d%/}/latest.json" "{\"latest\":\"$best\",\"updatable\":$writable,\"backup\":\"$(cat "${d%/}/backup/version" 2>/dev/null)\"}"
       [ "$writable" = true ] && [ -f "${d%/}/update-request.json" ] && update_module "$d"
       [ "$writable" = true ] && [ -f "${d%/}/rollback-request.json" ] && rollback_module "$d"
+      [ -f "${d%/}/addons-wanted.json" ] && sync_addons "$d"
     done
     if [ -f "$HOME_DIR/.restart" ]; then
       # the new script takes over: the workers stop, and the login item or the service starts the new one

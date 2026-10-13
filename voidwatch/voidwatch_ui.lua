@@ -91,6 +91,30 @@ local function updateRow(body, u)
   if u.error then make('VwText', body, 'The update failed: ' .. short(u.error, 60)) end
 end
 
+-- the addons the release offers, and any the folder has that the release no longer lists
+local function addonList(v)
+  local out, seen = {}, {}
+  for _, a in ipairs(v.addonCatalog or {}) do
+    if type(a) == 'table' and a.id and not seen[a.id] then seen[a.id] = true; out[#out + 1] = { id = a.id, name = tostring(a.name or a.id) } end
+  end
+  for _, st in ipairs(v.addons or {}) do
+    if not seen[st.id] then seen[st.id] = true; out[#out + 1] = { id = st.id, name = st.id } end
+  end
+  return out
+end
+
+local function addonOf(v, id)
+  for _, st in ipairs(v.addons or {}) do
+    if st.id == id then return st end
+  end
+end
+
+local function addonKey(v)
+  local parts = { tostring(v.addonsOff) }
+  for _, a in ipairs(addonList(v)) do parts[#parts + 1] = a.id .. '=' .. tostring(addonOf(v, a.id) ~= nil) end
+  return table.concat(parts, ',')
+end
+
 -- the parts that only change when the state does are built once; the numbers are filled in every second
 local function build(v)
   local body = win.body
@@ -128,6 +152,20 @@ local function build(v)
     make('VwSeparator', body)
     make('VwHead', body, 'Data sources')
     for i in ipairs(v.sources) do refs.sources[i] = make('VwSource', body) end
+    local list = addonList(v)
+    if #list > 0 then
+      make('VwSeparator', body)
+      make('VwHead', body, 'Addons')
+      refs.addons = {}
+      for _, a in ipairs(list) do
+        local st = addonOf(v, a.id)
+        refs.addons[a.id] = line(body, a.name)
+        buttons(body, (st and 'Remove ' or 'Install ') .. a.name, function()
+          if st then Voidwatch.removeAddon(a.id) else Voidwatch.installAddon(a.id) end
+        end)
+      end
+      buttons(body, v.addonsOff and 'Start all addons' or 'Stop all addons', v.addonsOff and Voidwatch.startAddons or Voidwatch.stopAddons)
+    end
     make('VwSeparator', body)
     make('VwHead', body, 'Set on the dashboard')
     refs.captures = line(body, 'Screenshots')
@@ -219,6 +257,11 @@ local function fill(v)
     refs.plan.value:setText(v.plan and planText(v.plan) or 'none')
     refs.plan:setTooltip(v.plan and planText(v.plan) or 'A command that waits for a label of the route: force refill, stop in depot or switch route.')
   end
+  for id, row in pairs(refs.addons or {}) do
+    local st = addonOf(v, id)
+    row.value:setText(not st and 'not installed' or v.addonsOff and 'stopped for all clients' or st.on and ('runs, ' .. tostring(st.version))
+      or tostring(st.error or 'stopped'))
+  end
   if refs.memory then refs.memory.value:setText(('Lua %d MB, client %s MB'):format(v.heapMB, tostring(v.clientMB or '?'))) end
   if refs.errors then
     refs.errors.value:setText(v.errors > 0 and (v.errors .. ', last: ' .. short(v.lastError, 26)) or 'none')
@@ -275,7 +318,7 @@ local function refresh()
   if not win then return end
   local ok, v = pcall(Voidwatch.view)
   if ok and type(v) == 'table' then
-    local now = v.state .. '|' .. #v.sources .. '|' .. updateKey(v.update) .. '|' .. tostring(v.plan and v.plan.state == 'running')
+    local now = v.state .. '|' .. #v.sources .. '|' .. updateKey(v.update) .. '|' .. tostring(v.plan and v.plan.state == 'running') .. '|' .. addonKey(v)
     if now ~= shape then
       shape = now
       build(v)

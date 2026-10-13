@@ -12,6 +12,7 @@
 --   inbox/commands.json         commands to run
 --   plan.json                   the bot's running plan, so a bot reload keeps it; removed at logout
 --   outbox/exiva.json           the player's own exiva cast and its answer, which starts a team exiva
+--   addons-wanted.json          the addons this folder wants; the upload script puts them in addons/<id>/
 -- Everything the stock client knows, the module reads itself. The rest comes from adapters (/developers/new-server):
 --   Voidwatch.register(adapter)    a server adapter in this module, for example orion.lua; it runs only on its server
 --   Voidwatch.attachBot(adapter)   the bot adapter, a script in the bot's config folder; it attaches every 10 s
@@ -23,7 +24,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.9.2'
+local MODULE = 'voidwatch-feed/0.10.0'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -97,6 +98,141 @@ end
 local function keyOf(name) return (name:lower():gsub('[^%w]+', '_')) end
 
 local function mb(bytes) return math.floor(bytes / 1048576) end
+
+-- addons: our own optional parts of the module, from the same GitHub release and checked like the core. The upload
+-- script puts them in the data folder, so every client of that folder has them. Each one runs in its own environment;
+-- its errors are caught, and ADDON_ERRORS in a row stop it. A file named addons-off in the data folder stops them all.
+local ADDON_DIR = ROOT .. '/addons'
+local ADDON_ERRORS = 10
+local ADDON_SCAN_MS = 5000
+local addons, addonScanAt = {}, -math.huge              -- id -> { id, version, env, handlers, timers, errors, off, error, loaded }
+local unloadAddon
+
+local function addonCall(rec, fn, ...)
+  if rec.off then return false end
+  local ok, err = pcall(fn, ...)
+  if ok then rec.errors = 0; return true end
+  rec.errors, rec.error = rec.errors + 1, tostring(err):sub(1, 200)
+  log(('addon %s: %s'):format(rec.id, rec.error))
+  if rec.errors >= ADDON_ERRORS then
+    unloadAddon(rec)
+    rec.off = true
+    say(('addon %s stopped after %d errors: %s'):format(rec.id, ADDON_ERRORS, rec.error))
+  end
+  return false
+end
+
+function unloadAddon(rec)
+  if rec.env and type(rec.env.terminate) == 'function' then pcall(rec.env.terminate) end
+  for _, ev in pairs(rec.timers) do removeEvent(ev) end
+  rec.timers, rec.handlers, rec.env, rec.loaded = {}, {}, nil, false
+end
+
+local function addonApi(rec)
+  local api = { id = rec.id, version = rec.version, dir = ADDON_DIR .. '/' .. rec.id .. '/' }
+  function api.log(text) log(rec.id .. ': ' .. tostring(text)) end
+  function api.say(text) say(tostring(text)) end
+  function api.on(name, fn) if type(fn) == 'function' then rec.handlers[name] = fn end end
+  function api.settings() return type(me.settings) == 'table' and me.settings or {} end
+  function api.state() return me.last end
+  function api.minimap() return modules.game_minimap and modules.game_minimap.minimapWidget or nil end
+  function api.after(ms, fn)
+    local key = {}
+    rec.timers[key] = scheduleEvent(function() rec.timers[key] = nil; addonCall(rec, fn) end, ms)
+    return key
+  end
+  function api.cancel(key)
+    if rec.timers[key] then removeEvent(rec.timers[key]) end
+    rec.timers[key] = nil
+  end
+  return api
+end
+
+local function loadAddon(id, version)
+  local rec = addons[id] or { id = id, errors = 0, timers = {}, handlers = {} }
+  addons[id] = rec
+  if rec.loaded then unloadAddon(rec) end
+  rec.version, rec.off, rec.errors, rec.error = version, false, 0, nil
+  local src = read(ADDON_DIR .. '/' .. id .. '/main.lua')
+  local chunk, err = nil, 'no main.lua'
+  if src then chunk, err = loadstring(src, '@addons/' .. id .. '/main.lua') end
+  if not chunk then
+    rec.off, rec.error = true, tostring(err):sub(1, 200)
+    return
+  end
+  local env = setmetatable({ Addon = addonApi(rec) }, { __index = getfenv(1) })
+  setfenv(chunk, env)
+  rec.env, rec.loaded = env, true
+  if addonCall(rec, chunk) and type(env.init) == 'function' then addonCall(rec, env.init) end
+  if not rec.off then log(('addon %s %s loaded'):format(id, version)) end
+end
+
+local function stopAllAddons()
+  for _, rec in pairs(addons) do
+    if rec.loaded then unloadAddon(rec) end
+  end
+end
+
+-- loads new and changed addons, unloads removed ones; the upload script writes .version beside each addon
+local function wantedAddons()
+  local w = readJson(ROOT .. '/addons-wanted.json')
+  return w and type(w.ids) == 'table' and w.ids or {}
+end
+
+local function scanAddons(force)
+  local now = g_clock.millis()
+  if not force and now - addonScanAt < ADDON_SCAN_MS then return end
+  addonScanAt = now
+  if g_resources.fileExists(ROOT .. '/addons-off') then return stopAllAddons() end
+  local wanted, seen = {}, {}
+  for _, id in ipairs(wantedAddons()) do wanted[tostring(id)] = true end
+  local ok, names = pcall(g_resources.listDirectoryFiles, ADDON_DIR)
+  for _, id in ipairs(ok and type(names) == 'table' and names or {}) do
+    id = tostring(id)
+    local manifest = wanted[id] and id:match('^[%w%-]+$') and readJson(ADDON_DIR .. '/' .. id .. '/addon.json')
+    if manifest then
+      seen[id] = true
+      local version = (read(ADDON_DIR .. '/' .. id .. '/.version') or tostring(manifest.version or '?')):match('^%s*(.-)%s*$')
+      local rec = addons[id]
+      if not rec or rec.version ~= version or (not rec.off and not rec.loaded) then loadAddon(id, version) end
+    end
+  end
+  for id, rec in pairs(addons) do
+    if not seen[id] then
+      if rec.loaded then unloadAddon(rec) end
+      addons[id] = nil
+    end
+  end
+end
+
+local function emitAddons(name, ...)
+  for _, rec in pairs(addons) do
+    local fn = rec.loaded and rec.handlers[name]
+    if fn then addonCall(rec, fn, ...) end
+  end
+end
+
+local function setWanted(id, on)
+  local out = {}
+  for _, x in ipairs(wantedAddons()) do
+    if x ~= id then out[#out + 1] = x end
+  end
+  if on then out[#out + 1] = id end
+  table.sort(out)
+  return write(ROOT .. '/addons-wanted.json', json.encode({ ids = out }))
+end
+
+local function addonStates()
+  local out = {}
+  for id, rec in pairs(addons) do out[#out + 1] = { id = id, version = rec.version, on = rec.loaded == true, error = rec.error } end
+  for _, id in ipairs(wantedAddons()) do
+    if not addons[id] then
+      out[#out + 1] = { id = id, on = false, error = g_resources.fileExists(ADDON_DIR .. '/.failed-' .. id) and 'the download failed' or 'installing' }
+    end
+  end
+  table.sort(out, function(a, b) return a.id < b.id end)
+  return out
+end
 
 -- some clients return an empty OS name; the client's own build target is the fallback
 local function platform()
@@ -309,7 +445,10 @@ local function onTalk(name, level, mode, text, channelId, pos)
 end
 
 local function onTextMessage(mode, text)
-  if alive and not halted and type(text) == 'string' then exivaMessage(text) end
+  if alive and not halted and type(text) == 'string' then
+    exivaMessage(text)
+    emitAddons('message', mode, text)
+  end
   if not alive or halted or not ledger or type(text) ~= 'string' then return end
   if onUse(text) then return end
   local body = text:match('^Loot of [^:]+:%s*(.+)$')
@@ -579,6 +718,7 @@ end
 local function halt(why)
   halted = why
   stopAdapters()
+  stopAllAddons()
   say('stopped: ' .. why .. '. Start it again in the Voidwatch window, or reload the module.')
   changed()
 end
@@ -658,6 +798,8 @@ local function state(p)
   s.used = usedState()
   s.supplies, s.suppliesSource = supplyState(s.supplies, not (me.settings and me.settings.supplyList == false))
   s.adapters = list(adapterStates())
+  s.addons = list(addonStates())
+  emitAddons('status', s)
   if COMMANDS and not (me.settings and me.settings.commands == false) then s.actions = list(actionNames()) end
   return s
 end
@@ -813,6 +955,7 @@ local function tick()
     if halted then return end
   end
   pcall(ensureStartFile)
+  pcall(scanAddons)
   local ok, err = pcall(step)
   if ok then
     errors = 0
@@ -853,6 +996,7 @@ Voidwatch.actions.cast_exiva = function(args, ctx)
   return 'pending'
 end
 Voidwatch.actions.exiva_show = function(args)
+  emitAddons('exiva', args)
   local target = tostring(args.target or '?')
   local x, y = tonumber(args.x), tonumber(args.y)
   if not x or not y then
@@ -865,6 +1009,16 @@ Voidwatch.actions.exiva_show = function(args)
   say(('exiva %s: around %d, %d, %s, within %d sqm, %s%s.'):format(target, x, y, floor, tonumber(args.radius) or 0,
     agree and agree < n and ('%d of %d answers agree'):format(agree, n) or ('answers: %d'):format(n), more == 1 and ', 1 more area' or more > 1 and (', %d more areas'):format(more) or ''))
   return true, 'shown'
+end
+Voidwatch.actions.addon_install = function(args)
+  local id = type(args.addon) == 'string' and args.addon:match('^[%w%-]+$')
+  if not id then return false, 'no valid addon' end
+  return setWanted(id, true), 'the upload script installs it for every client in this folder'
+end
+Voidwatch.actions.addon_remove = function(args)
+  local id = type(args.addon) == 'string' and args.addon:match('^[%w%-]+$')
+  if not id then return false, 'no valid addon' end
+  return setWanted(id, false), 'removed for every client in this folder'
 end
 Voidwatch.actions.logout_in_pz = function()
   local p = g_game.getLocalPlayer()
@@ -983,6 +1137,7 @@ function Voidwatch.terminate()
   alive = false
   if Voidwatch.ui and Voidwatch.ui.terminate then pcall(Voidwatch.ui.terminate) end
   stopAdapters()
+  stopAllAddons()
   disconnect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd, onTalk = onTalk })
   flushLedger(true)
   if loopEvent then removeEvent(loopEvent) end
@@ -1152,6 +1307,8 @@ function Voidwatch.view()
     suppliesSource = me.last and me.last.suppliesSource or nil, commands = COMMANDS,
     routeName = me.last and me.last.route or nil, phase = me.last and me.last.phase or nil, labelsMissing = me.last and me.last.labelsMissing or nil,
     plan = p and field('plan') or nil,
+    addons = addonStates(), addonsOff = g_resources.fileExists(ROOT .. '/addons-off'),
+    addonCatalog = me.reply and type(me.reply.addonCatalog) == 'table' and me.reply.addonCatalog or {},
     heapMB = math.floor(collectgarbage('count') / 1024), clientMB = okMem and type(bytes) == 'number' and mb(bytes) or nil,
     errors = errors, lastError = lastError, sources = sources(), dir = g_resources.getWriteDir() .. ROOT:sub(2),
     update = {
@@ -1163,6 +1320,19 @@ function Voidwatch.view()
       error = upd.result and upd.result.ok == false and tostring(upd.result.error) or nil,
     },
   }
+end
+
+function Voidwatch.installAddon(id) return Voidwatch.actions.addon_install({ addon = id }) end
+function Voidwatch.removeAddon(id) return Voidwatch.actions.addon_remove({ addon = id }) end
+
+-- the off file stops every addon in every client that shares this folder, until it starts them again
+function Voidwatch.stopAddons()
+  write(ROOT .. '/addons-off', 'stopped in the Voidwatch window\n')
+  scanAddons(true)
+end
+function Voidwatch.startAddons()
+  pcall(g_resources.deleteFile, ROOT .. '/addons-off')
+  scanAddons(true)
 end
 
 function Voidwatch.stopHere()
