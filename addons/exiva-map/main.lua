@@ -1,12 +1,12 @@
--- Exiva map, a Voidwatch addon, MIT licence. Draws a team exiva result on the minimap: the website sends the finished
--- area as rows of cells, and this addon paints them into one small image in memory, laid over the minimap where the
--- area is. A pointer at the edge of the game view shows the way to the area. Nothing is written to disk.
+-- Exiva map, a Voidwatch addon, MIT licence. Draws a team exiva result on the minimap like the website does: the website
+-- sends the area as rows of cells, and this addon lays a translucent fill and a sharp outline over those map squares.
+-- A pointer at the edge of the game view shows the way to the area. Nothing is written to disk.
 local SHOW_MS = 180000
 local FADE_EVERY_MS = 10000
-local MAX_SIDE = 256
-local OUTLINE_SQM = 1500
+local OPEN_SQM = 1500
 local MAX_SHOWN = 3
-local PALETTE = { { 0, 0, 0, 0 }, { 255, 196, 0, 105 }, { 255, 214, 70, 235 } }
+local MAX_PIECES = 1500
+local FILL, EDGE = '#ffc40080', '#ffc400'
 local ARROW_PALETTE = { { 0, 0, 0, 0 }, { 20, 16, 0, 230 }, { 255, 196, 0, 255 } }
 local FONT, FONT_FALLBACK = 'voidwatch-13px', 'verdana-11px-antialised'
 local ARROW, EDGE_GAP, PAD = 19, 4, 4
@@ -88,37 +88,51 @@ local function base64(s)
   return concat(out)
 end
 
--- the rows as an image: one pixel per cell, or per square of cells for a big area; the pixels at the edge are brighter,
--- and an area wider than OUTLINE_SQM keeps only its edge, so it does not cover the map
-local function paint(area)
+-- the area as pieces over the map squares: rows with the same run merge into one fill, and the outline runs along every
+-- side of a cell that has no cell next to it. Squares are [first, last + 1), so pieces meet without gaps.
+local function pieces(area)
   local step = tonumber(area.step) or 1
-  local minx, maxx, miny, maxy = math.huge, -math.huge, math.huge, -math.huge
+  local half, rows, order = floor(step / 2), {}, {}
   for _, r in ipairs(area.rows) do
-    minx, maxx = math.min(minx, r[2]), math.max(maxx, r[3])
-    miny, maxy = math.min(miny, r[1]), math.max(maxy, r[1])
+    if not rows[r[1]] then rows[r[1]], order[#order + 1] = {}, r[1] end
+    table.insert(rows[r[1]], { r[2] - half, r[3] - half + step })
   end
-  local cols, lines = floor((maxx - minx) / step) + 1, floor((maxy - miny) / step) + 1
-  local k = math.max(1, math.ceil(math.max(cols, lines) / MAX_SIDE))
-  local outline = math.max(cols, lines) * step > OUTLINE_SQM
-  local w, h = math.ceil(cols / k), math.ceil(lines / k)
-  local grid = {}
-  for _, r in ipairs(area.rows) do
-    local y = floor((r[1] - miny) / step / k)
-    for x = r[2], r[3], step do grid[y * w + floor((x - minx) / step / k)] = true end
-  end
-  local px = {}
-  for y = 0, h - 1 do
-    for x = 0, w - 1 do
-      local i = y * w + x
-      if not grid[i] then
-        px[#px + 1] = '\0'
-      else
-        local edge = x == 0 or y == 0 or x == w - 1 or y == h - 1 or not grid[i - 1] or not grid[i + 1] or not grid[i - w] or not grid[i + w]
-        px[#px + 1] = edge and '\2' or outline and '\0' or '\1'
+  table.sort(order)
+  for _, y in ipairs(order) do table.sort(rows[y], function(a, b) return a[1] < b[1] end) end
+  local function minus(a, b)
+    local out = {}
+    for _, r in ipairs(a) do
+      local x = r[1]
+      for _, q in ipairs(b or {}) do
+        if q[2] > x and q[1] < r[2] then
+          if q[1] > x then out[#out + 1] = { x, q[1] } end
+          x = math.max(x, q[2])
+        end
       end
+      if x < r[2] then out[#out + 1] = { x, r[2] } end
     end
+    return out
   end
-  return { data = png(w, h, concat(px), PALETTE), outline = outline, w = w, h = h, sqm = step * k, x0 = minx - step / 2, y0 = miny - step / 2 }
+  local fills, edges, open, sides = {}, {}, {}, {}
+  local x0, x1, y0, y1 = math.huge, -math.huge, math.huge, -math.huge
+  for _, y in ipairs(order) do
+    local t, b, now = y - half, y - half + step, {}
+    for _, r in ipairs(rows[y]) do
+      local key = r[1] .. ':' .. r[2]
+      local f = open[key]
+      if f and f[4] == t then f[4] = b else f = { r[1], t, r[2], b }; fills[#fills + 1] = f end
+      now[key] = f
+      for _, x in ipairs({ r[1], r[2] }) do
+        local e = sides[x]
+        if e and e[4] == t then e[4] = b else e = { 'v', x, t, b }; edges[#edges + 1] = e; sides[x] = e end
+      end
+      x0, x1, y0, y1 = math.min(x0, r[1]), math.max(x1, r[2]), math.min(y0, t), math.max(y1, b)
+    end
+    open = now
+    for _, seg in ipairs(minus(rows[y], rows[y - step])) do edges[#edges + 1] = { 'h', seg[1], seg[2], t } end
+    for _, seg in ipairs(minus(rows[y], rows[y + step])) do edges[#edges + 1] = { 'h', seg[1], seg[2], b } end
+  end
+  return fills, edges, math.max(x1 - x0, y1 - y0)
 end
 
 local function viewedFloor()
@@ -126,11 +140,46 @@ local function viewedFloor()
   return ok and cam and cam.z or 7
 end
 
--- the image sits where its area is; its size follows the zoom of the minimap
+-- each piece is pinned to the edges of map squares, so the minimap keeps it in place and in size at every zoom and move;
+-- a floor change pins them again on the floor in view
 local function place(s)
-  local z, scale = viewedFloor(), minimap:getScale()
-  s.image:resize(math.max(1, floor(s.w * s.sqm * scale + 0.5)), math.max(1, floor(s.h * s.sqm * scale + 0.5)))
-  minimap:centerInPosition(s.image, { x = floor(s.x0 + s.w * s.sqm / 2), y = floor(s.y0 + s.h * s.sqm / 2), z = z })
+  local z = viewedFloor()
+  for _, w in ipairs(s.pieces or {}) do w:destroy() end
+  s.pieces = {}
+  local function piece(color)
+    local w = g_ui.createWidget('UIWidget', minimap)
+    w:setPhantom(true)
+    w:setFocusable(false)
+    w:setBackgroundColor(color)
+    pcall(function() minimap:moveChildToIndex(w, 1) end)
+    s.pieces[#s.pieces + 1] = w
+    return w
+  end
+  local function pin(w, edge, x, y, hooked) minimap:anchorPosition(w, edge, { x = x, y = y, z = z }, hooked) end
+  local edges = #s.fills + #s.edges > MAX_PIECES and {} or s.edges
+  for _, e in ipairs(edges) do
+    local w = piece(EDGE)
+    if e[1] == 'h' then
+      w:setHeight(2)
+      w:setMarginTop(-1)
+      pin(w, AnchorLeft, e[2], e[4], AnchorLeft)
+      pin(w, AnchorRight, e[3] - 1, e[4], AnchorRight)
+      pin(w, AnchorTop, e[2], e[4], AnchorTop)
+    else
+      w:setWidth(2)
+      w:setMarginLeft(-1)
+      pin(w, AnchorLeft, e[2], e[3], AnchorLeft)
+      pin(w, AnchorTop, e[2], e[3], AnchorTop)
+      pin(w, AnchorBottom, e[2], e[4] - 1, AnchorBottom)
+    end
+  end
+  for _, f in ipairs(s.fills) do
+    local w = piece(FILL)
+    pin(w, AnchorLeft, f[1], f[2], AnchorLeft)
+    pin(w, AnchorRight, f[3] - 1, f[2], AnchorRight)
+    pin(w, AnchorTop, f[1], f[2], AnchorTop)
+    pin(w, AnchorBottom, f[1], f[4] - 1, AnchorBottom)
+  end
   minimap:centerInPosition(s.label, { x = s.cx, y = s.cy, z = z })
 end
 
@@ -233,7 +282,8 @@ local function aim(s)
   s.lines[2]:setText(fl and (dist .. ', ' .. fl) or dist)
   local tw = math.max(s.lines[1]:getWidth(), s.lines[2]:getWidth())
   local bw, bh = tw + PAD * 2, s.lines[1]:getHeight() + s.lines[2]:getHeight() + PAD * 2
-  local w, h, origin = mapPanel:getWidth(), mapPanel:getHeight(), mapPanel:getPosition()
+  local rect = mapPanel:getRect()
+  local w, h, origin = rect.width, rect.height, { x = rect.x, y = rect.y }
   local bx, by
   local dx, dy = s.cx - pos.x, s.cy - pos.y
   if near == 0 then
@@ -278,7 +328,7 @@ local function forget(key)
   local s = shown[key]
   if not s then return end
   if s.timer then Addon.cancel(s.timer) end
-  s.image:destroy()
+  for _, w in ipairs(s.pieces or {}) do w:destroy() end
   s.label:destroy()
   for _, w in ipairs({ s.box, s.tip, s.lines and s.lines[1], s.lines and s.lines[2] }) do w:destroy() end
   shown[key] = nil
@@ -290,7 +340,7 @@ local function fade(key)
   local age = g_clock.millis() - s.at
   if age >= SHOW_MS then return forget(key) end
   local opacity = 1 - 0.6 * age / SHOW_MS
-  s.image:setOpacity(opacity)
+  for _, w in ipairs(s.pieces or {}) do w:setOpacity(opacity) end
   s.label:setOpacity(opacity)
   for _, w in ipairs({ s.box, s.tip, s.lines and s.lines[1], s.lines and s.lines[2] }) do w:setOpacity(math.max(0.7, opacity)) end
   s.label:setText(s.name .. (age >= 60000 and (' · ' .. floor(age / 60000) .. ' min') or ''))
@@ -310,50 +360,40 @@ local function show(args)
   end
   if count >= MAX_SHOWN then forget(oldest) end
   local started = g_clock.millis()
-  local img = paint(area)
-  local image = g_ui.createWidget('UIWidget', minimap)
-  image:setPhantom(true)
-  image:setFocusable(false)
-  pcall(function() minimap:moveChildToIndex(image, 1) end)
-  image:setImageSourceBase64(base64(img.data))
-  pcall(function() image:setImageSmooth(false) end)
+  local fills, edges, span = pieces(area)
   local label = g_ui.createWidget('UILabel', minimap)
   label:setPhantom(true)
   label:setColor('#ffd23c')
   label:setTextAutoResize(true)
-  local s = { image = image, label = label, name = tostring(args.target or '?'), at = g_clock.millis(), x0 = img.x0, y0 = img.y0,
-              w = img.w, h = img.h, sqm = img.sqm, cx = tonumber(args.x) or floor(img.x0), cy = tonumber(args.y) or floor(img.y0),
-              rows = area.rows, step = tonumber(area.step) or 1, open = img.outline, zmin = tonumber(args.zmin), zmax = tonumber(args.zmax) }
+  local s = { label = label, name = tostring(args.target or '?'), at = g_clock.millis(), fills = fills, edges = edges,
+              cx = tonumber(args.x) or area.rows[1][2], cy = tonumber(args.y) or area.rows[1][1], rows = area.rows,
+              step = tonumber(area.step) or 1, open = span > OPEN_SQM, zmin = tonumber(args.zmin), zmax = tonumber(args.zmax) }
   shown[key] = s
   place(s)
   aimAll()
   fade(key)
-  Addon.log(('%s: %dx%d px, %d bytes, %d ms'):format(s.name, img.w, img.h, #img.data, g_clock.millis() - started))
-end
-
-local function onZoom()
-  for _, s in pairs(shown) do place(s) end
+  Addon.log(('%s: %d fills, %d edges, %d ms'):format(s.name, #fills, #edges, g_clock.millis() - started))
 end
 
 local lastFloor
 local function onCamera(_, pos)
   if not pos or pos.z == lastFloor then return end
   lastFloor = pos.z
-  onZoom()
+  for _, s in pairs(shown) do place(s) end
 end
 
 function init()
   minimap = Addon.minimap()
   mapPanel = modules.game_interface and modules.game_interface.getMapPanel and modules.game_interface.getMapPanel()
   Addon.on('exiva', show)
-  if minimap then connect(minimap, { onZoomChange = onZoom, onCameraPositionChange = onCamera }) end
+  if minimap then connect(minimap, { onCameraPositionChange = onCamera }) end
   if LocalPlayer then connect(LocalPlayer, { onPositionChange = aimAll }) end
   if mapPanel then connect(mapPanel, { onGeometryChange = aimAll }) end
 end
 
 function terminate()
   for key in pairs(shown) do forget(key) end
-  if minimap then disconnect(minimap, { onZoomChange = onZoom, onCameraPositionChange = onCamera }) end
+  if minimap then disconnect(minimap, { onCameraPositionChange = onCamera }) end
   if LocalPlayer then disconnect(LocalPlayer, { onPositionChange = aimAll }) end
   if mapPanel then disconnect(mapPanel, { onGeometryChange = aimAll }) end
 end
