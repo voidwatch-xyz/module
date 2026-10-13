@@ -1,19 +1,19 @@
 -- Exiva map, a Voidwatch addon, MIT licence. Draws a team exiva result on the minimap like the website does: the website
 -- sends the area as rows of cells, and this addon lays a translucent fill and a sharp outline over those map squares.
 -- A pointer at the edge of the game view shows the way to the area. Nothing is written to disk.
-local SHOW_MS = 180000
-local FADE_EVERY_MS = 10000
+local SHOW_MS = 30000
+local FADE_EVERY_MS = 2000
 local OPEN_SQM = 1500
 local MAX_SHOWN = 3
 local MAX_PIECES = 1500
 local FILL, EDGE = '#ffc40080', '#ffc400'
 local ARROW_PALETTE = { { 0, 0, 0, 0 }, { 20, 16, 0, 230 }, { 255, 196, 0, 255 } }
-local FONT, FONT_FALLBACK = 'voidwatch-13px', 'verdana-11px-antialised'
+local FONT = 'verdana-11px-antialised'
 local ARROW, EDGE_GAP, PAD = 19, 4, 4
 
 local band, bxor, rshift = bit.band, bit.bxor, bit.rshift
 local schar, sbyte, concat, floor = string.char, string.byte, table.concat, math.floor
-local shown, minimap, mapPanel, font, arrows = {}, nil, nil, nil, {}
+local shown, minimap, mapPanel, arrows = {}, nil, nil, {}
 
 -- a PNG with a 3-colour palette and transparency, in zlib "stored" blocks: small, and fast enough in plain Lua
 local crcTable
@@ -140,8 +140,9 @@ local function viewedFloor()
   return ok and cam and cam.z or 7
 end
 
--- each piece is pinned to the edges of map squares, so the minimap keeps it in place and in size at every zoom and move;
--- a floor change pins them again on the floor in view
+-- each piece is pinned to the centres of map squares, so the minimap keeps it in place and in size at every zoom and move.
+-- The minimap's tile rectangle is a sprite-sized box around the square, so its edges would be 16 squares off. A floor
+-- change pins the pieces again on the floor in view.
 local function place(s)
   local z = viewedFloor()
   for _, w in ipairs(s.pieces or {}) do w:destroy() end
@@ -156,44 +157,37 @@ local function place(s)
     return w
   end
   local function pin(w, edge, x, y, hooked) minimap:anchorPosition(w, edge, { x = x, y = y, z = z }, hooked) end
+  local H, V = AnchorHorizontalCenter, AnchorVerticalCenter
   local edges = #s.fills + #s.edges > MAX_PIECES and {} or s.edges
   for _, e in ipairs(edges) do
     local w = piece(EDGE)
     if e[1] == 'h' then
       w:setHeight(2)
       w:setMarginTop(-1)
-      pin(w, AnchorLeft, e[2], e[4], AnchorLeft)
-      pin(w, AnchorRight, e[3] - 1, e[4], AnchorRight)
-      pin(w, AnchorTop, e[2], e[4], AnchorTop)
+      pin(w, AnchorLeft, e[2], e[4], H)
+      pin(w, AnchorRight, e[3], e[4], H)
+      pin(w, AnchorTop, e[2], e[4], V)
     else
       w:setWidth(2)
       w:setMarginLeft(-1)
-      pin(w, AnchorLeft, e[2], e[3], AnchorLeft)
-      pin(w, AnchorTop, e[2], e[3], AnchorTop)
-      pin(w, AnchorBottom, e[2], e[4] - 1, AnchorBottom)
+      pin(w, AnchorLeft, e[2], e[3], H)
+      pin(w, AnchorTop, e[2], e[3], V)
+      pin(w, AnchorBottom, e[2], e[4], V)
     end
   end
   for _, f in ipairs(s.fills) do
     local w = piece(FILL)
-    pin(w, AnchorLeft, f[1], f[2], AnchorLeft)
-    pin(w, AnchorRight, f[3] - 1, f[2], AnchorRight)
-    pin(w, AnchorTop, f[1], f[2], AnchorTop)
-    pin(w, AnchorBottom, f[1], f[4] - 1, AnchorBottom)
+    w:setMarginRight(1)
+    w:setMarginBottom(1)
+    pin(w, AnchorLeft, f[1], f[2], H)
+    pin(w, AnchorRight, f[3], f[2], H)
+    pin(w, AnchorTop, f[1], f[2], V)
+    pin(w, AnchorBottom, f[1], f[4], V)
   end
   minimap:centerInPosition(s.label, { x = s.cx, y = s.cy, z = z })
 end
 
-
 -- the pointer: a framed box with the name, the distance and the floor, and an arrow at the edge of the game view
-local function loadFont()
-  if font then return font end
-  font = FONT_FALLBACK
-  pcall(function()
-    if not g_fonts.fontExists(FONT) then g_fonts.importFont(Addon.dir .. FONT) end
-    if g_fonts.fontExists(FONT) then font = FONT end
-  end)
-  return font
-end
 
 -- one arrow per direction, 0 = east and clockwise in steps of 45 degrees, with a dark edge
 local function arrow(i)
@@ -253,7 +247,7 @@ local function makePointer(s)
   for i, color in ipairs({ '#ffd23c', '#ffffff' }) do
     local l = g_ui.createWidget('UILabel', mapPanel)
     l:setPhantom(true)
-    l:setFont(loadFont())
+    l:setFont(FONT)
     l:setColor(color)
     l:setTextAutoResize(true)
     lines[i] = l
@@ -339,11 +333,11 @@ local function fade(key)
   if not s then return end
   local age = g_clock.millis() - s.at
   if age >= SHOW_MS then return forget(key) end
-  local opacity = 1 - 0.6 * age / SHOW_MS
+  local opacity = 1 - 0.7 * age / SHOW_MS
   for _, w in ipairs(s.pieces or {}) do w:setOpacity(opacity) end
   s.label:setOpacity(opacity)
   for _, w in ipairs({ s.box, s.tip, s.lines and s.lines[1], s.lines and s.lines[2] }) do w:setOpacity(math.max(0.7, opacity)) end
-  s.label:setText(s.name .. (age >= 60000 and (' · ' .. floor(age / 60000) .. ' min') or ''))
+  s.label:setText(s.name)
   s.timer = Addon.after(FADE_EVERY_MS, function() fade(key) end)
 end
 
