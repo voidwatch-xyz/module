@@ -24,7 +24,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.10.0'
+local MODULE = 'voidwatch-feed/0.10.1'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -357,6 +357,7 @@ local EXIVA_GAP_MS = 5000
 local EXIVA_TRIES = 5
 local EXIVA_RETRY_MS = 400
 local EXIVA_ANSWER_MS = 3000
+local EXIVA_LATE_MS = 10000
 local EXIVA_MANA = 20
 local EXIVA_DIRS = { north = 'north', south = 'south', east = 'east', west = 'west', ['north-east'] = 'north-east',
   ['north-west'] = 'north-west', ['south-east'] = 'south-east', ['south-west'] = 'south-west', northeast = 'north-east',
@@ -399,9 +400,29 @@ local function exivaCast(p)
   g_game.talk('exiva "' .. p.name .. '"')
 end
 
+local function sameTarget(name, target)
+  local n, want = name:lower(), target:lower():gsub('~$', '')
+  return n:sub(1, #want) == want or want:sub(1, #n) == n
+end
+
+-- the game sends the answer before it echoes the spell words, so an answer with no team cast waiting is the player's own
+-- cast, however it was typed; a late answer to a recent team cast is not
+local function ownExiva(text)
+  local a = exivaAnswer(text)
+  if not a or not (me.settings and me.settings.exiva) then return end
+  local now, pl = g_clock.millis(), g_game.getLocalPlayer()
+  if exiva.team and now - exiva.team.t < EXIVA_LATE_MS and sameTarget(a.name, exiva.team.target) then return end
+  local at = pl and pl:getPosition()
+  if not at then return end
+  exiva.last = now
+  write(me.dir .. '/outbox/exiva.json', json.encode({ target = a.name, pos = { x = at.x, y = at.y, z = at.z }, band = a.band, dir = a.dir, level = a.level, text = text }))
+  say(('your exiva on %s starts a team exiva.'):format(a.name))
+end
+
 local function exivaMessage(text)
   local p = exiva.pending
-  if not p or not me.dir or g_clock.millis() - p.t > EXIVA_ANSWER_MS then return end
+  if not me.dir then return end
+  if not p or g_clock.millis() - p.t > EXIVA_ANSWER_MS then return ownExiva(text) end
   local refused
   for _, r in ipairs(EXIVA_REFUSALS) do
     if text:find(r[1]) then refused = r[2] break end
@@ -423,25 +444,9 @@ local function exivaMessage(text)
     if #text <= 100 and not text:find('^Loot of') and not text:find('^Using ') then p.last = text end
     return
   end
-  local n, want = a.name:lower(), p.target:gsub('~$', '')
-  if n:sub(1, #want) ~= want and want:sub(1, #n) ~= n then return end
+  if not sameTarget(a.name, p.target) then return ownExiva(text) end
   exiva.pending = nil
-  if p.team then
-    addResults({ { id = p.id, ok = true, message = text, data = { x = p.pos.x, y = p.pos.y, z = p.pos.z, band = a.band, dir = a.dir, level = a.level } } })
-  elseif me.settings and me.settings.exiva then
-    write(me.dir .. '/outbox/exiva.json', json.encode({ target = a.name, pos = p.pos, band = a.band, dir = a.dir, level = a.level, text = text }))
-  end
-end
-
-local function onTalk(name, level, mode, text, channelId, pos)
-  local p = alive and not halted and g_game.getLocalPlayer()
-  if not p or name ~= p:getName() or type(text) ~= 'string' then return end
-  local who = text:match('^[Ee]xiva%s+"?(.-)"?%s*$')
-  if not who or who == '' then return end
-  if exiva.pending and exiva.pending.team and exiva.pending.target == who:lower() then return end
-  local at = pos or p:getPosition()
-  exiva.pending = { target = who:lower(), pos = { x = at.x, y = at.y, z = at.z }, t = g_clock.millis() }
-  exiva.last = g_clock.millis()
+  addResults({ { id = p.id, ok = true, message = text, data = { x = p.pos.x, y = p.pos.y, z = p.pos.z, band = a.band, dir = a.dir, level = a.level } } })
 end
 
 local function onTextMessage(mode, text)
@@ -990,7 +995,7 @@ Voidwatch.actions.cast_exiva = function(args, ctx)
   if now - exiva.last < EXIVA_GAP_MS then return false, 'cast less than 5 s ago' end
   local at = p:getPosition()
   local cast = { id = ctx and ctx.id, team = true, name = target, target = target:lower(), pos = { x = at.x, y = at.y, z = at.z }, t = now, tries = 0 }
-  exiva.pending, exiva.last = cast, now
+  exiva.pending, exiva.last, exiva.team = cast, now, { target = cast.target, t = now }
   say(('exiva on %s for %s.'):format(target, tostring(args.by or 'your team')))
   exivaCast(cast)
   return 'pending'
@@ -1125,7 +1130,7 @@ end
 function Voidwatch.init()
   alive, halted, loops, errors, lastError, me, bot = true, nil, 0, 0, nil, {}, nil
   ledger, ledgerDirty, prices = nil, false, nil
-  connect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd, onTalk = onTalk })
+  connect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd })
   baseKB = collectgarbage('count')
   heap = { baseKB }
   loopEvent = scheduleEvent(tick, LOOP_MS)
@@ -1138,7 +1143,7 @@ function Voidwatch.terminate()
   if Voidwatch.ui and Voidwatch.ui.terminate then pcall(Voidwatch.ui.terminate) end
   stopAdapters()
   stopAllAddons()
-  disconnect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd, onTalk = onTalk })
+  disconnect(g_game, { onTextMessage = onTextMessage, onOpenNpcTrade = onOpenNpcTrade, onGameEnd = onGameEnd })
   flushLedger(true)
   if loopEvent then removeEvent(loopEvent) end
   loopEvent = nil
