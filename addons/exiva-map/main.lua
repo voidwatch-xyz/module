@@ -1,13 +1,14 @@
 -- Exiva map, a Voidwatch addon, MIT licence. Draws a team exiva result on the minimap like the website does: the website
 -- sends the area as rows of cells, and this addon lays a translucent fill and a sharp outline over those map squares.
--- A pointer at the edge of the game view shows the way to the area. Nothing is written to disk.
+-- The player's own cast draws its own answer at once, before the team's answers come. Dotted lines show each caster's
+-- answer. A pointer at the edge of the game view shows the way to the area. Nothing is written to disk.
 local SHOW_MS = 30000
 local FADE_EVERY_MS = 2000
 local OPEN_SQM = 1500
 local MAX_SHOWN = 3
 local MAX_PIECES = 1500
-local FILL, EDGE = '#ffc40080', '#ffc400'
-local ARROW_PALETTE = { { 0, 0, 0, 0 }, { 20, 16, 0, 230 }, { 255, 196, 0, 255 } }
+local MAX_DOTS = 500
+local COLORS = { '#ffc400', '#33e0ff', '#ff4fd8', '#ff6b6b' }
 local FONT = 'verdana-11px-antialised'
 local ARROW, EDGE_GAP, PAD = 19, 4, 4
 
@@ -135,6 +136,141 @@ local function pieces(area)
   return fills, edges, math.max(x1 - x0, y1 - y0)
 end
 
+-- one answer alone, with the game's own test (spells.cpp, SearchPlayer). "Very far" has no end, so it stops at VERY_FAR.
+local BESIDE, CLOSE, FAR, VERY_FAR = 4, 100, 274, 1500
+local ANGLE = { east = 0, ['south-east'] = 45, south = 90, ['south-west'] = 135, west = 180, ['north-west'] = 225, north = 270, ['north-east'] = 315 }
+local RING = { beside = { 0, BESIDE }, close = { 0, CLOSE }, far = { CLOSE, FAR }, veryfar = { FAR, VERY_FAR } }
+
+local function direction(dx, dy)
+  local tan = dx ~= 0 and dy / dx or 10
+  if math.abs(tan) < 0.4142 then return dx > 0 and 'west' or 'east' end
+  if math.abs(tan) < 2.4142 then
+    if tan > 0 then return dy > 0 and 'north-west' or 'south-east' end
+    return dx > 0 and 'south-west' or 'north-east'
+  end
+  return dy > 0 and 'north' or 'south'
+end
+
+local function fits(c, x, y)
+  local dx, dy = c.x - x, c.y - y
+  local beside = math.abs(dx) < BESIDE and math.abs(dy) < BESIDE
+  if c.band == 'beside' then return beside end
+  if beside then return false end
+  local d2, lo, hi = dx * dx + dy * dy, RING[c.band][1], RING[c.band][2]
+  return d2 >= lo * lo and d2 < hi * hi and direction(dx, dy) == c.dir
+end
+
+-- the cells of one answer as rows, coarse enough for about 6000 cells, and their centre
+local function wedge(c)
+  local lo, hi = RING[c.band][1], RING[c.band][2]
+  local x0, y0, x1, y1 = c.x - hi, c.y - hi, c.x + hi, c.y + hi
+  if c.band ~= 'beside' then
+    x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+    local base = math.rad(ANGLE[c.dir])
+    for _, p in ipairs({ { lo, -1 }, { lo, 1 }, { hi, -1 }, { hi, 1 }, { hi, 0 } }) do
+      local a = base + p[2] * math.pi / 8
+      local x, y = c.x + p[1] * math.cos(a), c.y + p[1] * math.sin(a)
+      x0, y0, x1, y1 = math.min(x0, x), math.min(y0, y), math.max(x1, x), math.max(y1, y)
+    end
+  end
+  local step = 1
+  while (x1 - x0) * (y1 - y0) > 6000 * step * step do step = step * 2 end
+  local half, rows, sx, sy, n = floor(step / 2), {}, 0, 0, 0
+  for y = floor(y0 / step) * step, y1, step do
+    local run
+    for x = floor(x0 / step) * step, x1, step do
+      if fits(c, x + half, y + half) then
+        if run then run[3] = x + half else run = { y + half, x + half, x + half }; rows[#rows + 1] = run end
+        sx, sy, n = sx + x + half, sy + y + half, n + 1
+      else
+        run = nil
+      end
+    end
+  end
+  if n == 0 then return nil end
+  return { step = step, rows = rows }, floor(sx / n + 0.5), floor(sy / n + 0.5)
+end
+
+local function floorsOf(c)
+  local z = tonumber(c.z)
+  if not z then return nil end
+  if c.level == 'same' then return z, z end
+  if c.level == 'higher' and z > 0 then return 0, z - 1 end
+  if c.level == 'lower' and z < 15 then return z + 1, 15 end
+end
+
+-- the website picks the same colour from the name; a colour already on the minimap moves the name to the next free one
+local function colorOf(key)
+  local h = 0
+  for i = 1, #key do h = (h * 31 + sbyte(key, i)) % 4294967296 end
+  local first = h % #COLORS
+  for k = 0, #COLORS - 1 do
+    local color, used = COLORS[(first + k) % #COLORS + 1], false
+    for other, s in pairs(shown) do used = used or (other ~= key and s.color == color) end
+    if not used then return color end
+  end
+  return COLORS[first + 1]
+end
+
+-- how far the area is from a position: to its nearest and its farthest corner, or 0 when the position is inside
+local function reach(s, x, y)
+  local near, far, step = math.huge, 0, s.step
+  for _, r in ipairs(s.rows) do
+    local x1, x2, y1, y2 = r[2] - step / 2, r[3] + step / 2, r[1] - step / 2, r[1] + step / 2
+    local dx, dy = math.max(x1 - x, 0, x - x2), math.max(y1 - y, 0, y - y2)
+    near = math.min(near, math.sqrt(dx * dx + dy * dy))
+    for _, cx in ipairs({ x1, x2 }) do
+      for _, cy in ipairs({ y1, y2 }) do far = math.max(far, math.sqrt((cx - x) ^ 2 + (cy - y) ^ 2)) end
+    end
+  end
+  return near, far
+end
+
+-- each caster's answer as a dotted outline from where it stood, like the website draws it. A "very far" outline ends a
+-- little past the area. The dots keep their spacing in squares, so they stay in place at every zoom.
+local function guides(s, casts)
+  local parts, total = {}, 0
+  local function line(ax, ay, bx, by)
+    local len = math.sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
+    parts[#parts + 1], total = { len, function(t) return ax + (bx - ax) * t, ay + (by - ay) * t end }, total + len
+  end
+  local function arc(x, y, r, a0, a1)
+    if r <= 0 then return end
+    parts[#parts + 1], total = { r * (a1 - a0), function(t) local a = a0 + (a1 - a0) * t return x + r * math.cos(a), y + r * math.sin(a) end }, total + r * (a1 - a0)
+  end
+  local from = {}
+  for i, c in ipairs(type(casts) == 'table' and casts or {}) do
+    local x, y, ring = tonumber(c.x), tonumber(c.y), RING[c.band]
+    if i > 20 then break end
+    if x and y and ring and (c.band == 'beside' or ANGLE[c.dir]) then
+      from[#from + 1] = { floor(x), floor(y) }
+      local lo, hi = ring[1], ring[2]
+      if c.band == 'beside' then
+        line(x - BESIDE, y - BESIDE, x + BESIDE, y - BESIDE)
+        line(x + BESIDE, y - BESIDE, x + BESIDE, y + BESIDE)
+        line(x + BESIDE, y + BESIDE, x - BESIDE, y + BESIDE)
+        line(x - BESIDE, y + BESIDE, x - BESIDE, y - BESIDE)
+      else
+        if c.band == 'veryfar' then hi = math.min(3000, math.max(lo + 100, select(2, reach(s, x, y)) + 20)) end
+        local a0, a1 = math.rad(ANGLE[c.dir]) - math.pi / 8, math.rad(ANGLE[c.dir]) + math.pi / 8
+        for _, a in ipairs({ a0, a1 }) do line(x + lo * math.cos(a), y + lo * math.sin(a), x + hi * math.cos(a), y + hi * math.sin(a)) end
+        arc(x, y, lo, a0, a1)
+        if c.band ~= 'veryfar' then arc(x, y, hi, a0, a1) end
+      end
+    end
+  end
+  local gap, dots, seen = math.max(4, total / MAX_DOTS), {}, {}
+  for _, p in ipairs(parts) do
+    local n = math.max(1, floor(p[1] / gap + 0.5))
+    for i = 0, n do
+      local x, y = p[2](i / n)
+      x, y = floor(x + 0.5), floor(y + 0.5)
+      if not seen[x .. ':' .. y] then seen[x .. ':' .. y], dots[#dots + 1] = true, { x, y } end
+    end
+  end
+  return dots, from
+end
+
 local function viewedFloor()
   local ok, cam = pcall(function() return minimap:getCameraPosition() end)
   return ok and cam and cam.z or 7
@@ -158,9 +294,21 @@ local function place(s)
   end
   local function pin(w, edge, x, y, hooked) minimap:anchorPosition(w, edge, { x = x, y = y, z = z }, hooked) end
   local H, V = AnchorHorizontalCenter, AnchorVerticalCenter
+  for _, p in ipairs(s.from) do
+    local w = piece(s.color)
+    w:resize(6, 6)
+    w:setBorderWidth(1)
+    w:setBorderColor('#000000')
+    minimap:centerInPosition(w, { x = p[1], y = p[2], z = z })
+  end
+  for _, d in ipairs(s.dots) do
+    local w = piece(s.color .. 'c0')
+    w:resize(2, 2)
+    minimap:centerInPosition(w, { x = d[1], y = d[2], z = z })
+  end
   local edges = #s.fills + #s.edges > MAX_PIECES and {} or s.edges
   for _, e in ipairs(edges) do
-    local w = piece(EDGE)
+    local w = piece(s.color)
     if e[1] == 'h' then
       w:setHeight(2)
       w:setMarginTop(-1)
@@ -176,7 +324,7 @@ local function place(s)
     end
   end
   for _, f in ipairs(s.fills) do
-    local w = piece(FILL)
+    local w = piece(s.color .. '80')
     w:setMarginRight(1)
     w:setMarginBottom(1)
     pin(w, AnchorLeft, f[1], f[2], H)
@@ -189,9 +337,10 @@ end
 
 -- the pointer: a framed box with the name, the distance and the floor, and an arrow at the edge of the game view
 
--- one arrow per direction, 0 = east and clockwise in steps of 45 degrees, with a dark edge
-local function arrow(i)
-  if arrows[i] then return arrows[i] end
+-- one arrow per direction and colour, 0 = east and clockwise in steps of 45 degrees, with a dark edge
+local function arrow(i, color)
+  local key = color .. i
+  if arrows[key] then return arrows[key] end
   local a, c, r = i * math.pi / 4, (ARROW - 1) / 2, (ARROW - 1) / 2 * 0.95
   local ux, uy = math.cos(a), math.sin(a)
   local p = { { c + ux * r, c + uy * r }, { c - ux * r * 0.45 - uy * r * 0.85, c - uy * r * 0.45 + ux * r * 0.85 },
@@ -210,22 +359,9 @@ local function arrow(i)
       px[#px + 1] = not on and '\0' or edge and '\1' or '\2'
     end
   end
-  arrows[i] = base64(png(ARROW, ARROW, concat(px), ARROW_PALETTE))
-  return arrows[i]
-end
-
--- how far the area is from a position: to its nearest and its farthest corner, or 0 when the position is inside
-local function reach(s, x, y)
-  local near, far, step = math.huge, 0, s.step
-  for _, r in ipairs(s.rows) do
-    local x1, x2, y1, y2 = r[2] - step / 2, r[3] + step / 2, r[1] - step / 2, r[1] + step / 2
-    local dx, dy = math.max(x1 - x, 0, x - x2), math.max(y1 - y, 0, y - y2)
-    near = math.min(near, math.sqrt(dx * dx + dy * dy))
-    for _, cx in ipairs({ x1, x2 }) do
-      for _, cy in ipairs({ y1, y2 }) do far = math.max(far, math.sqrt((cx - x) ^ 2 + (cy - y) ^ 2)) end
-    end
-  end
-  return near, far
+  local palette = { { 0, 0, 0, 0 }, { 20, 16, 0, 230 }, { tonumber(color:sub(2, 3), 16), tonumber(color:sub(4, 5), 16), tonumber(color:sub(6, 7), 16), 255 } }
+  arrows[key] = base64(png(ARROW, ARROW, concat(px), palette))
+  return arrows[key]
 end
 
 local function floorText(s, z)
@@ -242,9 +378,9 @@ local function makePointer(s)
   box:setFocusable(false)
   box:setBackgroundColor('#000000a6')
   box:setBorderWidth(1)
-  box:setBorderColor('#ffc400')
+  box:setBorderColor(s.color)
   local lines = {}
-  for i, color in ipairs({ '#ffd23c', '#ffffff' }) do
+  for i, color in ipairs({ s.color, '#ffffff' }) do
     local l = g_ui.createWidget('UILabel', mapPanel)
     l:setPhantom(true)
     l:setFont(FONT)
@@ -291,7 +427,7 @@ local function aim(s)
     local t = math.min(tx, ty)
     local ax, ay = w / 2 + dx * t, h / 2 + dy * t
     local i = floor((math.atan2(dy, dx) + math.pi / 8) / (math.pi / 4)) % 8
-    if s.dir ~= i then s.tip:setImageSourceBase64(arrow(i)) s.dir = i end
+    if s.dir ~= i then s.tip:setImageSourceBase64(arrow(i, s.color)) s.dir = i end
     s.tip:setVisible(true)
     at(s.tip, ax - ARROW / 2, ay - ARROW / 2, origin)
     if tx <= ty then
@@ -355,18 +491,30 @@ local function show(args)
   if count >= MAX_SHOWN then forget(oldest) end
   local started = g_clock.millis()
   local fills, edges, span = pieces(area)
+  local color = colorOf(key)
   local label = g_ui.createWidget('UILabel', minimap)
   label:setPhantom(true)
-  label:setColor('#ffd23c')
+  label:setColor(color)
   label:setTextAutoResize(true)
-  local s = { label = label, name = tostring(args.target or '?'), at = g_clock.millis(), fills = fills, edges = edges,
+  local s = { label = label, name = tostring(args.target or '?'), at = g_clock.millis(), fills = fills, edges = edges, color = color,
               cx = tonumber(args.x) or area.rows[1][2], cy = tonumber(args.y) or area.rows[1][1], rows = area.rows,
-              step = tonumber(area.step) or 1, open = span > OPEN_SQM, zmin = tonumber(args.zmin), zmax = tonumber(args.zmax) }
+              step = tonumber(area.step) or 1, open = args.open == true or span > OPEN_SQM, zmin = tonumber(args.zmin), zmax = tonumber(args.zmax) }
+  s.dots, s.from = guides(s, args.casts)
   shown[key] = s
   place(s)
   aimAll()
   fade(key)
-  Addon.log(('%s: %d fills, %d edges, %d ms'):format(s.name, #fills, #edges, g_clock.millis() - started))
+  Addon.log(('%s: %d fills, %d edges, %d dots, %d ms'):format(s.name, #fills, #edges, #s.dots, g_clock.millis() - started))
+end
+
+-- the player's own cast: its answer alone, until the team's answers make the area smaller
+local function cast(args)
+  local c = { x = tonumber(args.x), y = tonumber(args.y), z = args.z, band = args.band, dir = args.dir, level = args.level }
+  if not c.x or not c.y or not RING[c.band] or (c.band ~= 'beside' and not ANGLE[c.dir]) then return end
+  local area, cx, cy = wedge(c)
+  if not area then return end
+  local zmin, zmax = floorsOf(c)
+  show({ target = args.target, x = cx, y = cy, zmin = zmin, zmax = zmax, area = area, open = c.band == 'veryfar' })
 end
 
 local lastFloor
@@ -380,6 +528,7 @@ function init()
   minimap = Addon.minimap()
   mapPanel = modules.game_interface and modules.game_interface.getMapPanel and modules.game_interface.getMapPanel()
   Addon.on('exiva', show)
+  Addon.on('exiva_cast', cast)
   if minimap then connect(minimap, { onCameraPositionChange = onCamera }) end
   if LocalPlayer then connect(LocalPlayer, { onPositionChange = aimAll }) end
   if mapPanel then connect(mapPanel, { onGeometryChange = aimAll }) end

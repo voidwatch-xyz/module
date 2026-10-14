@@ -378,7 +378,7 @@ while (Test-Path $Dir) {
         $w = Call 'Get' '/wake' $null $null 5
         if ($w.code -eq 200 -and $w.body -match '"wake":true') { $wake = $true }
       }
-    } elseif ($statusEvery -le 2) {
+    } elseif ($statusEvery -le 5) {
       Start-Sleep -Milliseconds 500
     } elseif ($age -gt 300) {
       Start-Sleep -Seconds 10  # the client is closed or logged out: no request stays open

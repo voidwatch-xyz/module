@@ -1,0 +1,8 @@
+{
+  "id": "team-radar",
+  "name": "Team radar",
+  "plan": "free",
+  "minModule": "0.12.0",
+  "about": "Shows your other characters and the guild mates who share their position on your in-game minimap.",
+  "points": ["Your own characters in gold, guild mates in violet", "Only guild mates who share their position", "Updates every 5 seconds while it runs", "A character on another floor shows its floor"]
+}
