@@ -354,7 +354,7 @@ while [ -d "$DIR" ]; do
       wake_check=$now
       [ "$(request GET /wake -m 5)" = 200 ] && grep -q '"wake":true' "$BODY" && wake=1
     fi
-  elif [ "$status_every" -le 2 ]; then
+  elif [ "$status_every" -le 5 ]; then
     sleep 0.5
   elif [ "$age" -gt 300 ]; then
     sleep 10 # the client is closed or logged out: no request stays open
