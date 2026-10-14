@@ -7,8 +7,9 @@ local FADE_EVERY_MS = 2000
 local OPEN_SQM = 1500
 local MAX_SHOWN = 3
 local MAX_PIECES = 1500
-local MAX_DOTS = 500
-local COLORS = { '#ffc400', '#33e0ff', '#ff4fd8', '#ff6b6b' }
+local MAX_DOTS = 100
+local COLORS = { '#ffc400', '#33e0ff', '#ff8ae2' }
+local KINDS = { 'fill', 'h', 'v', 'dot', 'mark' }
 local FONT = 'verdana-11px-antialised'
 local ARROW, EDGE_GAP, PAD = 19, 4, 4
 
@@ -276,63 +277,95 @@ local function viewedFloor()
   return ok and cam and cam.z or 7
 end
 
+-- the minimap lays out every child again after each change, so a draw goes in one batch, as the client's own minimap
+-- does (gamelib/ui/uiminimap.lua). Creating a widget costs about 1 ms in the client, so a redraw keeps its widgets.
+local function batch(fn)
+  local layout = minimap:getLayout()
+  if not layout then return fn() end
+  layout:disableUpdates()
+  local ok, err = pcall(fn)
+  layout:enableUpdates()
+  layout:update()
+  if not ok then error(err, 0) end
+end
+
 -- each piece is pinned to the centres of map squares, so the minimap keeps it in place and in size at every zoom and move.
--- The minimap's tile rectangle is a sprite-sized box around the square, so its edges would be 16 squares off. A floor
--- change pins the pieces again on the floor in view.
+-- The minimap's tile rectangle is a sprite-sized box around the square, so its edges would be 16 squares off. A redraw
+-- or a floor change pins the same widgets again and hides the ones left over.
 local function place(s)
   local z = viewedFloor()
-  for _, w in ipairs(s.pieces or {}) do w:destroy() end
-  s.pieces = {}
-  local function piece(color)
-    local w = g_ui.createWidget('UIWidget', minimap)
-    w:setPhantom(true)
-    w:setFocusable(false)
+  s.w = s.w or { fill = {}, h = {}, v = {}, dot = {}, mark = {} }
+  local used = { fill = 0, h = 0, v = 0, dot = 0, mark = 0 }
+  local function piece(kind, color)
+    used[kind] = used[kind] + 1
+    local w = s.w[kind][used[kind]]
+    if not w then
+      w = g_ui.createWidget('UIWidget', minimap)
+      w:setPhantom(true)
+      w:setFocusable(false)
+      if kind == 'fill' then
+        w:setMarginRight(1)
+        w:setMarginBottom(1)
+      elseif kind == 'h' then
+        w:setHeight(2)
+        w:setMarginTop(-1)
+      elseif kind == 'v' then
+        w:setWidth(2)
+        w:setMarginLeft(-1)
+      elseif kind == 'dot' then
+        w:resize(2, 2)
+      else
+        w:resize(6, 6)
+        w:setBorderWidth(1)
+        w:setBorderColor('#000000')
+      end
+      local below = 1
+      for _, k in ipairs(KINDS) do
+        if k == kind then break end
+        below = below + #s.w[k]
+      end
+      pcall(function() minimap:moveChildToIndex(w, below) end)
+      s.w[kind][used[kind]] = w
+    end
     w:setBackgroundColor(color)
-    pcall(function() minimap:moveChildToIndex(w, 1) end)
-    s.pieces[#s.pieces + 1] = w
+    w:setVisible(true)
     return w
   end
   local function pin(w, edge, x, y, hooked) minimap:anchorPosition(w, edge, { x = x, y = y, z = z }, hooked) end
   local H, V = AnchorHorizontalCenter, AnchorVerticalCenter
-  for _, p in ipairs(s.from) do
-    local w = piece(s.color)
-    w:resize(6, 6)
-    w:setBorderWidth(1)
-    w:setBorderColor('#000000')
-    minimap:centerInPosition(w, { x = p[1], y = p[2], z = z })
-  end
-  for _, d in ipairs(s.dots) do
-    local w = piece(s.color .. 'c0')
-    w:resize(2, 2)
-    minimap:centerInPosition(w, { x = d[1], y = d[2], z = z })
-  end
-  local edges = #s.fills + #s.edges > MAX_PIECES and {} or s.edges
-  for _, e in ipairs(edges) do
-    local w = piece(s.color)
-    if e[1] == 'h' then
-      w:setHeight(2)
-      w:setMarginTop(-1)
-      pin(w, AnchorLeft, e[2], e[4], H)
-      pin(w, AnchorRight, e[3], e[4], H)
-      pin(w, AnchorTop, e[2], e[4], V)
-    else
-      w:setWidth(2)
-      w:setMarginLeft(-1)
-      pin(w, AnchorLeft, e[2], e[3], H)
-      pin(w, AnchorTop, e[2], e[3], V)
-      pin(w, AnchorBottom, e[2], e[4], V)
-    end
-  end
   for _, f in ipairs(s.fills) do
-    local w = piece(s.color .. '80')
-    w:setMarginRight(1)
-    w:setMarginBottom(1)
+    local w = piece('fill', s.color .. '80')
     pin(w, AnchorLeft, f[1], f[2], H)
     pin(w, AnchorRight, f[3], f[2], H)
     pin(w, AnchorTop, f[1], f[2], V)
     pin(w, AnchorBottom, f[1], f[4], V)
   end
+  local edges = #s.fills + #s.edges > MAX_PIECES and {} or s.edges
+  for _, e in ipairs(edges) do
+    local w = piece(e[1], s.color)
+    if e[1] == 'h' then
+      pin(w, AnchorLeft, e[2], e[4], H)
+      pin(w, AnchorRight, e[3], e[4], H)
+      pin(w, AnchorTop, e[2], e[4], V)
+    else
+      pin(w, AnchorLeft, e[2], e[3], H)
+      pin(w, AnchorTop, e[2], e[3], V)
+      pin(w, AnchorBottom, e[2], e[4], V)
+    end
+  end
+  for _, d in ipairs(s.dots) do minimap:centerInPosition(piece('dot', s.color .. 'c0'), { x = d[1], y = d[2], z = z }) end
+  for _, p in ipairs(s.from) do minimap:centerInPosition(piece('mark', s.color), { x = p[1], y = p[2], z = z }) end
+  for _, k in ipairs(KINDS) do
+    for i = used[k] + 1, #s.w[k] do s.w[k][i]:setVisible(false) end
+  end
+  s.used = used
   minimap:centerInPosition(s.label, { x = s.cx, y = s.cy, z = z })
+end
+
+local function eachPiece(s, fn)
+  for _, k in ipairs(KINDS) do
+    for i = 1, (s.used or {})[k] or 0 do fn(s.w[k][i]) end
+  end
 end
 
 -- the pointer: a framed box with the name, the distance and the floor, and an arrow at the edge of the game view
@@ -458,7 +491,11 @@ local function forget(key)
   local s = shown[key]
   if not s then return end
   if s.timer then Addon.cancel(s.timer) end
-  for _, w in ipairs(s.pieces or {}) do w:destroy() end
+  batch(function()
+    for _, k in ipairs(KINDS) do
+      for _, w in ipairs((s.w or {})[k] or {}) do w:destroy() end
+    end
+  end)
   s.label:destroy()
   for _, w in ipairs({ s.box, s.tip, s.lines and s.lines[1], s.lines and s.lines[2] }) do w:destroy() end
   shown[key] = nil
@@ -470,7 +507,7 @@ local function fade(key)
   local age = g_clock.millis() - s.at
   if age >= SHOW_MS then return forget(key) end
   local opacity = 1 - 0.7 * age / SHOW_MS
-  for _, w in ipairs(s.pieces or {}) do w:setOpacity(opacity) end
+  eachPiece(s, function(w) w:setOpacity(opacity) end)
   s.label:setOpacity(opacity)
   for _, w in ipairs({ s.box, s.tip, s.lines and s.lines[1], s.lines and s.lines[2] }) do w:setOpacity(math.max(0.7, opacity)) end
   s.label:setText(s.name)
@@ -482,26 +519,30 @@ local function show(args)
   local area = type(args.area) == 'table' and args.area
   if not minimap or not area or type(area.rows) ~= 'table' or #area.rows == 0 then return end
   local key = tostring(args.target or '?'):lower()
-  forget(key)
-  local count, oldest = 0, nil
-  for k, s in pairs(shown) do
-    count = count + 1
-    if not oldest or s.at < shown[oldest].at then oldest = k end
-  end
-  if count >= MAX_SHOWN then forget(oldest) end
   local started = g_clock.millis()
+  local s = shown[key]
+  if not s then
+    local count, oldest = 0, nil
+    for k, o in pairs(shown) do
+      count = count + 1
+      if not oldest or o.at < shown[oldest].at then oldest = k end
+    end
+    if count >= MAX_SHOWN then forget(oldest) end
+    local color = colorOf(key)
+    local label = g_ui.createWidget('UILabel', minimap)
+    label:setPhantom(true)
+    label:setColor(color)
+    label:setTextAutoResize(true)
+    s = { label = label, color = color }
+    shown[key] = s
+  end
+  if s.timer then Addon.cancel(s.timer) end
   local fills, edges, span = pieces(area)
-  local color = colorOf(key)
-  local label = g_ui.createWidget('UILabel', minimap)
-  label:setPhantom(true)
-  label:setColor(color)
-  label:setTextAutoResize(true)
-  local s = { label = label, name = tostring(args.target or '?'), at = g_clock.millis(), fills = fills, edges = edges, color = color,
-              cx = tonumber(args.x) or area.rows[1][2], cy = tonumber(args.y) or area.rows[1][1], rows = area.rows,
-              step = tonumber(area.step) or 1, open = args.open == true or span > OPEN_SQM, zmin = tonumber(args.zmin), zmax = tonumber(args.zmax) }
+  s.name, s.at, s.fills, s.edges, s.rows, s.step = tostring(args.target or '?'), g_clock.millis(), fills, edges, area.rows, tonumber(area.step) or 1
+  s.cx, s.cy = tonumber(args.x) or area.rows[1][2], tonumber(args.y) or area.rows[1][1]
+  s.open, s.zmin, s.zmax = args.open == true or span > OPEN_SQM, tonumber(args.zmin), tonumber(args.zmax)
   s.dots, s.from = guides(s, args.casts)
-  shown[key] = s
-  place(s)
+  batch(function() place(s) end)
   aimAll()
   fade(key)
   Addon.log(('%s: %d fills, %d edges, %d dots, %d ms'):format(s.name, #fills, #edges, #s.dots, g_clock.millis() - started))
@@ -521,7 +562,7 @@ local lastFloor
 local function onCamera(_, pos)
   if not pos or pos.z == lastFloor then return end
   lastFloor = pos.z
-  for _, s in pairs(shown) do place(s) end
+  if next(shown) then batch(function() for _, s in pairs(shown) do place(s) end end) end
 end
 
 function init()
