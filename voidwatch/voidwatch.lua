@@ -24,7 +24,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.10.6'
+local MODULE = 'voidwatch-feed/0.11.0'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -406,14 +406,16 @@ local function sameTarget(name, target)
 end
 
 -- the game sends the answer before it echoes the spell words, so an answer with no team cast waiting is the player's own
--- cast, however it was typed; a late answer to a recent team cast is not
+-- cast, however it was typed; a late answer to a recent team cast is not. Addons see every own cast, also with Team exiva off.
 local function ownExiva(text)
   local a = exivaAnswer(text)
-  if not a or not (me.settings and me.settings.exiva) then return end
+  if not a then return end
   local now, pl = g_clock.millis(), g_game.getLocalPlayer()
   if exiva.team and now - exiva.team.t < EXIVA_LATE_MS and sameTarget(a.name, exiva.team.target) then return end
   local at = pl and pl:getPosition()
   if not at then return end
+  emitAddons('exiva_cast', { target = a.name, x = at.x, y = at.y, z = at.z, band = a.band, dir = a.dir, level = a.level })
+  if not (me.settings and me.settings.exiva) then return end
   exiva.last = now
   write(me.dir .. '/outbox/exiva.json', json.encode({ target = a.name, pos = { x = at.x, y = at.y, z = at.z }, band = a.band, dir = a.dir, level = a.level, text = text }))
   say(('your exiva on %s starts a team exiva.'):format(a.name))
