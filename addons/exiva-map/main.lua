@@ -17,7 +17,7 @@ local ANGLE = { east = 0, ['south-east'] = 45, south = 90, ['south-west'] = 135,
 
 local band, bxor, rshift = bit.band, bit.bxor, bit.rshift
 local schar, sbyte, concat, floor = string.char, string.byte, table.concat, math.floor
-local shown, minimap, mapPanel, arrows = {}, nil, nil, {}
+local shown, minimap, mapPanel, arrows, holder = {}, nil, nil, {}, nil
 local pool = { strip = {}, thin = {}, edge = {}, mark = {} }
 
 
@@ -175,16 +175,18 @@ local function colorOf(key)
   return COLORS[first + 1]
 end
 
--- the minimap lays out every child again after each change, so a draw goes in one batch, as the client's own minimap
--- does (gamelib/ui/uiminimap.lua). Creating a widget costs about 1 ms in the client, so a redraw keeps its widgets.
-local function batch(fn)
-  local layout = minimap:getLayout()
-  if not layout then return fn() end
-  layout:disableUpdates()
-  local ok, err = pcall(fn)
-  layout:enableUpdates()
-  layout:update()
-  if not ok then error(err, 0) end
+-- Every piece sits in one holder over the minimap, so the minimap keeps a single child for this addon however big the
+-- area is: other modules that walk the minimap's children (a route editor raising its markers) stay fast, and a draw
+-- needs no layout pass of the minimap. Creating a widget costs about 1 ms in the client, so a redraw keeps its widgets.
+local function holderWidget()
+  if holder then return holder end
+  holder = g_ui.createWidget('UIWidget', minimap)
+  holder:setPhantom(true)
+  holder:setFocusable(false)
+  holder:setClipping(true)
+  holder:fill('parent')
+  pcall(function() minimap:moveChildToIndex(holder, 1) end)
+  return holder
 end
 
 local function take(used, kind, color, opacity)
@@ -192,7 +194,7 @@ local function take(used, kind, color, opacity)
   local list = pool[kind]
   local w = list[used[kind]]
   if not w then
-    w = g_ui.createWidget('UIWidget', minimap)
+    w = g_ui.createWidget('UIWidget', holderWidget())
     w:setPhantom(true)
     w:setFocusable(false)
     if kind == 'mark' then
@@ -204,7 +206,7 @@ local function take(used, kind, color, opacity)
       if k == kind then break end
       below = below + #pool[k]
     end
-    pcall(function() minimap:moveChildToIndex(w, below) end)
+    pcall(function() holder:moveChildToIndex(w, below) end)
     list[used[kind]] = w
   end
   w:setBackgroundColor(color)
@@ -237,7 +239,7 @@ end
 local function redraw()
   if not minimap then return end
   local used = { strip = 0, thin = 0, edge = 0, mark = 0 }
-  batch(function()
+  do
     local cam, r = minimap:getCameraPosition(), minimap:getRect()
     local p0 = cam and minimap:getTilePoint({ x = cam.x, y = cam.y, z = cam.z })
     local p8 = cam and minimap:getTilePoint({ x = cam.x + 8, y = cam.y, z = cam.z })
@@ -314,7 +316,7 @@ local function redraw()
     for _, k in ipairs(KINDS) do
       for i = used[k] + 1, #pool[k] do pool[k][i]:setVisible(false) end
     end
-  end)
+  end
 end
 
 local function viewedFloor()
@@ -549,6 +551,7 @@ function terminate()
     for _, w in ipairs(pool[k]) do w:destroy() end
     pool[k] = {}
   end
+  if holder then holder:destroy() holder = nil end
   if minimap then disconnect(minimap, { onCameraPositionChange = onCamera, onZoomChange = onChange, onGeometryChange = onChange }) end
   if LocalPlayer then disconnect(LocalPlayer, { onPositionChange = aimAll }) end
   if mapPanel then disconnect(mapPanel, { onGeometryChange = aimAll }) end
