@@ -1,18 +1,20 @@
-VwWho < Label
-  color: #ffffff
-  font: verdana-11px-rounded
+VwHead < Label
+  color: #e8c547
   text-auto-resize: true
 
-VwHead < Label
-  color: #ffdd55
-  font: verdana-11px-rounded
+VwSub < Label
+  color: #6f6f6f
   text-auto-resize: true
-  margin-top: 2
+  margin-top: 9
+  margin-left: 6
 
 VwText < Label
   color: #9b9b9b
   text-wrap: true
   text-auto-resize: true
+
+VwNote < VwText
+  color: #ffdd55
 
 VwDot < UIWidget
   size: 7 7
@@ -53,42 +55,70 @@ VwLine < Panel
     color: #dfdfdf
     text-auto-resize: true
 
-VwSource < Panel
-  height: 30
+VwKV < Panel
+  height: 15
+
+  Label
+    id: key
+    anchors.left: parent.left
+    anchors.top: parent.top
+    size: 100 15
+    text-align: left
+    color: #9b9b9b
+
+  Label
+    id: value
+    anchors.left: key.right
+    anchors.top: parent.top
+    height: 15
+    text-align: left
+    color: #dfdfdf
+    text-auto-resize: true
+
+  UIWidget
+    id: info
+    anchors.left: value.right
+    anchors.verticalCenter: value.verticalCenter
+    margin-left: 6
+    size: 11 11
+    visible: false
+
+VwSourceLine < Panel
+  height: 16
 
   VwDot
     id: dot
     anchors.left: parent.left
-    anchors.top: parent.top
-    margin-top: 4
+    anchors.verticalCenter: parent.verticalCenter
 
   Label
     id: name
     anchors.left: dot.right
-    anchors.top: parent.top
+    anchors.verticalCenter: parent.verticalCenter
     margin-left: 6
+    size: 104 16
+    text-align: left
     color: #ffffff
-    text-auto-resize: true
 
   Label
     id: gives
-    anchors.left: name.left
-    anchors.top: name.bottom
+    anchors.left: name.right
     anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    height: 16
+    text-align: left
     color: #9b9b9b
-    text-wrap: true
-    text-auto-resize: true
 
 VwButtons < Panel
-  height: 22
+  height: 21
 
   Button
     id: a
     anchors.left: parent.left
     anchors.right: parent.horizontalCenter
     anchors.verticalCenter: parent.verticalCenter
-    margin-right: 2
-    height: 20
+    margin-right: 3
+    height: 21
 
   Button
     id: b
@@ -96,7 +126,7 @@ VwButtons < Panel
     anchors.right: parent.right
     anchors.verticalCenter: parent.verticalCenter
     margin-left: 2
-    height: 20
+    height: 21
 
 VwCode < Label
   height: 34
@@ -107,45 +137,779 @@ VwCode < Label
   border-width: 1
   border-color: #4a4a4a
 
-VwSeparator < HorizontalSeparator
+VwSeparator < UIWidget
+  height: 2
   margin-top: 4
-  margin-bottom: 2
+  margin-bottom: 4
+  border-width: 1
+  border-color: #4a4a4a
+  border-color-top: #1a1a1a
+  border-color-left: #1a1a1a
+  border-color-right: #1a1a1a
+  phantom: true
+
+VwUpdate < Panel
+  height: 27
+  background-color: #e8a31721
+  border-width: 1
+  border-color: #b8901f
+
+  Label
+    id: text
+    anchors.left: parent.left
+    anchors.right: action.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 8
+    margin-right: 8
+    color: #ffdd55
+    text-wrap: true
+    text-auto-resize: true
+
+  Button
+    id: action
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-right: 3
+    size: 76 21
+    color: #ffffff
+    font: verdana-11px-rounded
+
+VwLink < UIButton
+  color: #9b9b9b
+  text-auto-resize: true
+  $hover:
+    color: #dfdfdf
+
+  UIWidget
+    id: line
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    height: 1
+    background-color: #9b9b9b
+    phantom: true
+
+VwFrame < UIWidget
+  background-color: #0000002e
+  border-width: 1
+  border-color: #4b4b4b
+  border-color-top: #161616
+  border-color-left: #161616
+
+VwCard < VwFrame
+  background-color: #00000029
+  padding: 8 10 8 10
+  clipping: true
+
+VwSunken < UIWidget
+  background-color: #141414
+  border-width: 1
+  border-color: #444444
+  border-color-top: #0c0c0c
+  border-color-left: #0c0c0c
+
+VwCheck < CheckBox
+  height: 16
+  text-auto-resize: false
+
+VwBadge < Label
+  height: 13
+  color: #1c1c1c
+  background-color: #e8a317
+  text-auto-resize: true
+  padding-left: 3
+  padding-right: 3
+  phantom: true
+
+VwMainConnected < Panel
+  anchors.fill: parent
+
+  VwCard
+    id: client
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.horizontalCenter
+    anchors.bottom: parent.bottom
+    margin-right: -14
+
+    VwHead
+      id: title
+      anchors.top: parent.top
+      anchors.left: parent.left
+      !text: tr('This client')
+
+    Panel
+      id: rows
+      anchors.top: title.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: sep.top
+      margin-top: 8
+      layout:
+        type: verticalBox
+        spacing: 8
+
+    VwButtons
+      id: stop
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+
+    Button
+      id: reset
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: stop.top
+      margin-bottom: 5
+      height: 21
+      !text: tr('Reset loot, supplies and time')
+
+    VwSeparator
+      id: sep
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: reset.top
+      margin-bottom: 8
+
+  VwCard
+    id: sources
+    anchors.top: parent.top
+    anchors.left: client.right
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    margin-left: 9
+
+    VwHead
+      id: title
+      anchors.top: parent.top
+      anchors.left: parent.left
+      !text: tr('Data sources')
+
+    ScrollablePanel
+      id: rows
+      anchors.top: title.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      margin-top: 8
+      vertical-scrollbar: scroll
+      layout:
+        type: verticalBox
+        spacing: 8
+
+    VerticalScrollBar
+      id: scroll
+      anchors.top: rows.top
+      anchors.right: parent.right
+      anchors.bottom: rows.bottom
+      step: 24
+      pixels-scroll: true
+      visible: false
+
+VwMainOther < Panel
+  anchors.fill: parent
+
+  VwCard
+    id: card
+    anchors.fill: parent
+
+    ScrollablePanel
+      id: body
+      anchors.fill: parent
+      vertical-scrollbar: scroll
+      layout:
+        type: verticalBox
+        spacing: 5
+
+    VerticalScrollBar
+      id: scroll
+      anchors.top: parent.top
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      step: 24
+      pixels-scroll: true
+      visible: false
+
+VwAddonItem < UIWidget
+  height: 54
+  padding: 5
+
+  CheckBox
+    id: here
+    anchors.left: parent.left
+    anchors.top: parent.top
+    size: 16 16
+
+  Label
+    id: name
+    anchors.left: here.right
+    anchors.top: parent.top
+    margin-left: 6
+    margin-top: 1
+    color: #ffffff
+    text-auto-resize: true
+    phantom: true
+
+  Label
+    id: summary
+    anchors.left: name.left
+    anchors.right: parent.right
+    anchors.top: name.bottom
+    margin-top: 2
+    height: 14
+    text-align: left
+    color: #8a8a8a
+    phantom: true
+
+  Label
+    id: state
+    anchors.left: name.left
+    anchors.top: summary.bottom
+    margin-top: 1
+    text-auto-resize: true
+    phantom: true
+
+  VwBadge
+    id: badge
+    anchors.left: name.right
+    anchors.verticalCenter: name.verticalCenter
+    margin-left: 5
+
+VwAddonOffer < UIWidget
+  height: 27
+  padding: 4 5 4 5
+
+  Label
+    id: name
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 22
+    color: #9b9b9b
+    text-auto-resize: true
+    phantom: true
+
+  Button
+    id: install
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    size: 54 19
+    !text: tr('Install')
+
+VwAddonsPage < Panel
+  anchors.fill: parent
+
+  VwCard
+    id: list
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.bottom: parent.bottom
+    width: 180
+    padding: 4
+
+    Label
+      id: hint
+      anchors.top: parent.top
+      anchors.left: parent.left
+      anchors.right: parent.right
+      margin-top: 2
+      margin-left: 5
+      height: 14
+      text-align: left
+      color: #6f6f6f
+      !text: tr('Ticked: on for this character')
+
+    Button
+      id: website
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      height: 21
+      !text: tr('Addons on the website')
+
+    Button
+      id: stopAll
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: website.top
+      margin-bottom: 4
+      height: 21
+
+    ScrollablePanel
+      id: items
+      anchors.top: hint.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: stopAll.top
+      margin-top: 4
+      margin-bottom: 6
+      vertical-scrollbar: itemsScroll
+      layout:
+        type: verticalBox
+
+    VerticalScrollBar
+      id: itemsScroll
+      anchors.top: items.top
+      anchors.right: parent.right
+      anchors.bottom: items.bottom
+      step: 24
+      pixels-scroll: true
+      visible: false
+
+  VwCard
+    id: detail
+    anchors.top: parent.top
+    anchors.left: list.right
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    margin-left: 9
+
+VwPoint < Panel
+  height: 14
+
+  UIWidget
+    id: mark
+    anchors.left: parent.left
+    anchors.top: parent.top
+    margin-top: 5
+    margin-left: 1
+    size: 4 4
+    background-color: #e8c547
+    phantom: true
+
+  Label
+    id: text
+    anchors.left: mark.right
+    anchors.right: parent.right
+    anchors.top: parent.top
+    margin-left: 5
+    height: 14
+    text-align: left
+    color: #9b9b9b
+
+VwAddonDetail < Panel
+  anchors.fill: parent
+
+  VwSunken
+    id: pic
+    anchors.top: parent.top
+    anchors.left: parent.left
+    size: 184 115
+
+    UIWidget
+      id: icon
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.bottom: parent.verticalCenter
+      margin-bottom: 1
+      size: 34 24
+      phantom: true
+
+    Label
+      id: picText
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.top: parent.verticalCenter
+      margin-top: 6
+      color: #6f6f6f
+      text-auto-resize: true
+      !text: tr('Screenshots come soon')
+
+    Label
+      id: picCount
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      margin-right: 6
+      margin-bottom: 4
+      color: #555555
+      text-auto-resize: true
+      text: 0 / 0
+
+  Label
+    id: name
+    anchors.top: parent.top
+    anchors.left: pic.right
+    margin-left: 12
+    color: #ffffff
+    font: verdana-11px-rounded
+    text-auto-resize: true
+
+  Label
+    id: state
+    anchors.top: parent.top
+    anchors.right: parent.right
+    text-auto-resize: true
+
+  Label
+    id: about
+    anchors.top: name.bottom
+    anchors.left: name.left
+    anchors.right: parent.right
+    margin-top: 6
+    color: #dfdfdf
+    text-wrap: true
+    text-auto-resize: true
+
+  Label
+    id: meta
+    anchors.top: about.bottom
+    anchors.left: name.left
+    anchors.right: parent.right
+    margin-top: 5
+    color: #6f6f6f
+    text-wrap: true
+    text-auto-resize: true
+
+  Panel
+    id: bar
+    anchors.top: pic.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 8
+    height: 21
+
+    Button
+      id: a
+      anchors.left: parent.left
+      anchors.top: parent.top
+      size: 86 21
+
+    Button
+      id: b
+      anchors.left: a.right
+      anchors.top: parent.top
+      margin-left: 5
+      size: 96 21
+
+    Button
+      id: remove
+      anchors.right: parent.right
+      anchors.top: parent.top
+      size: 72 21
+      color: #ff8a8a
+      !text: tr('Remove')
+
+  Panel
+    id: points
+    anchors.top: bar.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 9
+    height: 1
+
+    Panel
+      id: colA
+      anchors.top: parent.top
+      anchors.left: parent.left
+      anchors.right: parent.horizontalCenter
+      margin-right: 7
+      layout:
+        type: verticalBox
+        spacing: 3
+        fit-children: true
+
+    Panel
+      id: colB
+      anchors.top: parent.top
+      anchors.left: parent.horizontalCenter
+      anchors.right: parent.right
+      margin-left: 7
+      layout:
+        type: verticalBox
+        spacing: 3
+        fit-children: true
+
+  Label
+    id: errHead
+    anchors.top: points.bottom
+    anchors.left: parent.left
+    margin-top: 8
+    color: #e8c547
+    text-auto-resize: true
+    !text: tr('Last errors')
+
+  Label
+    id: errNone
+    anchors.left: errHead.right
+    anchors.verticalCenter: errHead.verticalCenter
+    margin-left: 6
+    color: #6f6f6f
+    text-auto-resize: true
+
+  VwSunken
+    id: log
+    anchors.top: errHead.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    margin-top: 4
+    background-color: #161616
+    padding: 4 6 4 6
+    layout:
+      type: verticalBox
+      spacing: 1
+
+VwLogLine < Label
+  height: 14
+  text-align: left
+  color: #dfdfdf
+
+VwNumber < Panel
+  height: 20
+
+  Label
+    id: key
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    color: #9b9b9b
+    text-auto-resize: true
+
+  SpinBox
+    id: value
+    anchors.left: key.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 7
+    size: 46 20
+    minimum: 5
+    maximum: 120
+    step: 1
+
+  Label
+    id: unit
+    anchors.left: value.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 7
+    color: #9b9b9b
+    text-auto-resize: true
+
+VwLabelField < Panel
+  height: 20
+
+  Label
+    id: key
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    size: 32 15
+    text-align: right
+    color: #9b9b9b
+
+  TextEdit
+    id: edit
+    anchors.left: key.right
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 6
+    height: 20
+    max-length: 80
+
+VwSettingsPage < Panel
+  anchors.fill: parent
+
+  VwCard
+    id: send
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.horizontalCenter
+    margin-right: 5
+    height: 132
+
+    VwHead
+      id: title
+      anchors.top: parent.top
+      anchors.left: parent.left
+      !text: tr('What this client sends')
+
+    Panel
+      id: rows
+      anchors.top: title.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      margin-top: 8
+      layout:
+        type: verticalBox
+        spacing: 8
+
+  VwCard
+    id: team
+    anchors.top: parent.top
+    anchors.left: parent.horizontalCenter
+    anchors.right: parent.right
+    margin-left: 4
+    height: 132
+
+    VwHead
+      id: title
+      anchors.top: parent.top
+      anchors.left: parent.left
+      !text: tr('Team and chat')
+
+    Panel
+      id: rows
+      anchors.top: title.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      margin-top: 8
+      layout:
+        type: verticalBox
+        spacing: 8
+
+  VwCard
+    id: labels
+    anchors.top: send.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 9
+    height: 58
+
+    VwHead
+      id: title
+      anchors.top: parent.top
+      anchors.left: parent.left
+      !text: tr('Route labels')
+
+    Panel
+      id: row
+      anchors.top: title.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      margin-top: 8
+      height: 20
+      layout:
+        type: horizontalBox
+        spacing: 12
+
+
+  Panel
+    id: bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    height: 21
+
+    VwState
+      id: status
+      anchors.left: parent.left
+      anchors.right: undo.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 8
+
+    Button
+      id: save
+      anchors.right: parent.right
+      anchors.top: parent.top
+      size: 60 21
+      font: verdana-11px-rounded
+      !text: tr('Save')
+
+    Button
+      id: undo
+      anchors.right: save.left
+      anchors.top: parent.top
+      margin-right: 5
+      size: 104 21
+      !text: tr('Undo changes')
+
+  Label
+    id: unpaired
+    anchors.centerIn: parent
+    color: #9b9b9b
+    text-auto-resize: true
+    visible: false
+    !text: tr('Pair this client first. The settings live on voidwatch.xyz.')
+
+VwPage < Panel
+  anchors.fill: parent
+  padding: 9
 
 VoidwatchWindow < MainWindow
   id: voidwatchWindow
   !text: tr('Voidwatch')
-  size: 330 200
+  size: 720 370
 
   Panel
-    id: body
+    id: top
     anchors.top: parent.top
     anchors.left: parent.left
     anchors.right: parent.right
     layout:
       type: verticalBox
-      spacing: 3
+      spacing: 7
       fit-children: true
 
-  HorizontalSeparator
-    id: footSep
+    Panel
+      id: head
+      height: 18
+
+      Label
+        id: name
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        color: #ffffff
+        font: verdana-11px-rounded
+        text-auto-resize: true
+
+      Label
+        id: server
+        anchors.left: name.right
+        anchors.verticalCenter: parent.verticalCenter
+        margin-left: 8
+        color: #9b9b9b
+        text-auto-resize: true
+
+      Label
+        id: stateText
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        text-auto-resize: true
+
+      VwDot
+        id: stateDot
+        anchors.right: stateText.left
+        anchors.verticalCenter: parent.verticalCenter
+        margin-right: 5
+
+  TabBar
+    id: tabs
+    anchors.top: top.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 8
+
+  VwFrame
+    id: content
+    anchors.top: tabs.bottom
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.bottom: closeButton.top
-    margin-bottom: 6
+    margin-bottom: 8
 
   Label
     id: version
     anchors.left: parent.left
     anchors.verticalCenter: closeButton.verticalCenter
-    color: #777777
+    color: #6f6f6f
     text-auto-resize: true
+
+  VwLink
+    id: update
+    anchors.left: version.right
+    anchors.verticalCenter: closeButton.verticalCenter
+    margin-left: 10
+    color: #ffdd55
+    visible: false
+
+  VwLink
+    id: rollback
+    anchors.left: update.right
+    anchors.verticalCenter: closeButton.verticalCenter
+    margin-left: 12
+    visible: false
 
   Button
     id: closeButton
     !text: tr('Close')
     anchors.right: parent.right
     anchors.bottom: parent.bottom
-    size: 80 20
+    size: 84 21
 
   Button
     id: dashboardButton
@@ -153,4 +917,4 @@ VoidwatchWindow < MainWindow
     anchors.right: closeButton.left
     anchors.bottom: parent.bottom
     margin-right: 5
-    size: 84 20
+    size: 84 21
