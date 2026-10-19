@@ -2,7 +2,7 @@
 -- sends the exact outline of the area, and this addon fills it and draws its edge. The player's own cast draws its own
 -- answer at once, before the team's answers come. Thin lines show each caster's answer. A pointer at the edge of the
 -- game view shows the way to the area. Nothing is written to disk.
-local SHOW_MS = 30000
+local SHOW_MS = 30000                                   -- the default of the addon's "fade" setting
 local FADE_EVERY_MS = 2000
 local OPEN_SQM = 1500
 local MAX_SHOWN = 3
@@ -395,6 +395,7 @@ local function aim(s)
   local pos = pl and pl:getPosition()
   if not mapPanel or not pos then return end
   if not s.box then makePointer(s) end
+  for _, w in ipairs({ s.box, s.lines[1], s.lines[2] }) do w:setVisible(true) end
   local near, far = reach(s, pos.x, pos.y)
   local fl = floorText(s, pos.z)
   local dist = near == 0 and 'you are in the area' or s.open and ('%d+ sqm'):format(floor(near))
@@ -435,13 +436,20 @@ local function aim(s)
   at(s.lines[2], bx + PAD, by + PAD + s.lines[1]:getHeight(), origin)
 end
 
+local function pointerOn() return not (Addon.setting and Addon.setting('pointer') == false) end
+local function showMs() return (tonumber(Addon.setting and Addon.setting('fade')) or SHOW_MS / 1000) * 1000 end
+
 local function aimAll()
-  local slot = 0
+  local on, slot = pointerOn(), 0
   for _, s in pairs(shown) do
-    s.slot = slot
-    slot = slot + 1
-    local ok, err = pcall(aim, s)
-    if not ok then Addon.log('pointer: ' .. tostring(err)) end
+    if on then
+      s.slot = slot
+      slot = slot + 1
+      local ok, err = pcall(aim, s)
+      if not ok then Addon.log('pointer: ' .. tostring(err)) end
+    elseif s.box then
+      for _, w in ipairs({ s.box, s.tip, s.lines[1], s.lines[2] }) do w:setVisible(false) end
+    end
   end
 end
 
@@ -459,8 +467,9 @@ local function fade(key)
   local s = shown[key]
   if not s then return end
   local age = g_clock.millis() - s.at
-  if age >= SHOW_MS then return forget(key) end
-  s.opacity = 1 - 0.7 * age / SHOW_MS
+  local life = showMs()
+  if age >= life then return forget(key) end
+  s.opacity = 1 - 0.7 * age / life
   s.label:setOpacity(s.opacity)
   for _, w in ipairs({ s.box, s.tip, s.lines and s.lines[1], s.lines and s.lines[2] }) do w:setOpacity(math.max(0.7, s.opacity)) end
   s.label:setText(s.name)
@@ -540,6 +549,7 @@ function init()
   mapPanel = modules.game_interface and modules.game_interface.getMapPanel and modules.game_interface.getMapPanel()
   Addon.on('exiva', show)
   Addon.on('exiva_cast', cast)
+  Addon.on('settings', aimAll)
   if minimap then connect(minimap, { onCameraPositionChange = onCamera, onZoomChange = onChange, onGeometryChange = onChange }) end
   if LocalPlayer then connect(LocalPlayer, { onPositionChange = aimAll }) end
   if mapPanel then connect(mapPanel, { onGeometryChange = aimAll }) end

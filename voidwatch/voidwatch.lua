@@ -14,6 +14,8 @@
 --   outbox/exiva.json           the player's own exiva cast and its answer, which starts a team exiva
 --   addons-wanted.json          the addons this folder wants; the upload script puts them in addons/<id>/
 --   addons-off.json             the addons turned off for this character, in its own folder
+--   addon-settings.json         each addon's own settings for this character, and addon-data/<id>.json its saved table
+--   addon-pictures/<id>/        the addon's screenshots; addon-pictures-wanted.txt asks the upload script for them
 -- Everything the stock client knows, the module reads itself. The rest comes from adapters (/developers/new-server):
 --   Voidwatch.register(adapter)    a server adapter in this module, for example orion.lua; it runs only on its server
 --   Voidwatch.attachBot(adapter)   the bot adapter, a script in the bot's config folder; it attaches every 10 s
@@ -25,7 +27,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.14.0'
+local MODULE = 'voidwatch-feed/0.15.0'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -109,10 +111,11 @@ local ADDON_ERRORS = 10
 local ADDON_SCAN_MS = 5000
 local ADDON_LOG = 20
 local OFF_HERE = 'off for this character'
+local ADDON_PICTURES = ROOT .. '/addon-pictures'
 local addons, addonScanAt = {}, -math.huge              -- id -> { id, version, env, handlers, timers, errors, off, error, loaded, here, log }
-local unloadAddon
+local unloadAddon, priceOf
 
-local function newAddon(id) return { id = id, errors = 0, timers = {}, handlers = {}, log = {} } end
+local function newAddon(id) return { id = id, errors = 0, timers = {}, handlers = {}, log = {}, connections = {}, widgets = {} } end
 
 local function addonLog(rec, text)
   table.insert(rec.log, 1, { at = os.time(), text = text })
@@ -137,7 +140,45 @@ end
 function unloadAddon(rec)
   if rec.env and type(rec.env.terminate) == 'function' then pcall(rec.env.terminate) end
   for _, ev in pairs(rec.timers) do removeEvent(ev) end
+  for _, c in ipairs(rec.connections or {}) do pcall(disconnect, c[1], c[2]) end
+  for _, w in ipairs(rec.widgets or {}) do pcall(function() if not w:isDestroyed() then w:destroy() end end) end
+  if rec.button then pcall(function() rec.button:destroy() end) end
   rec.timers, rec.handlers, rec.env, rec.loaded = {}, {}, nil, false
+  rec.connections, rec.widgets, rec.button, rec.openFn = {}, {}, nil, nil
+end
+
+-- an addon's own settings: declared in its addon.json, saved per character, the default while a saved value does not fit
+local SETTING_TYPES = { bool = true, number = true, choice = true }
+
+local function declaredSettings(rec)
+  local out = {}
+  for _, s in ipairs(rec.info and type(rec.info.settings) == 'table' and rec.info.settings or {}) do
+    if type(s) == 'table' and type(s.key) == 'string' and s.key:match('^[%w_]+$') and SETTING_TYPES[s.type] then out[#out + 1] = s end
+  end
+  return out
+end
+
+local function settingFits(s, v)
+  if s.type == 'bool' then return type(v) == 'boolean' end
+  if s.type == 'number' then
+    return type(v) == 'number' and v == v and (not tonumber(s.min) or v >= tonumber(s.min)) and (not tonumber(s.max) or v <= tonumber(s.max))
+  end
+  for _, o in ipairs(type(s.options) == 'table' and s.options or {}) do
+    if o == v then return true end
+  end
+  return false
+end
+
+local function addonSettings(rec)
+  local all = me.dir and readJson(me.dir .. '/addon-settings.json') or {}
+  local saved = type(all[rec.id]) == 'table' and all[rec.id] or {}
+  local out = {}
+  for _, s in ipairs(declaredSettings(rec)) do
+    local v = saved[s.key]
+    if v == nil or not settingFits(s, v) then v = s.default end
+    out[s.key] = v
+  end
+  return out
 end
 
 local function addonApi(rec)
@@ -157,6 +198,55 @@ local function addonApi(rec)
     if rec.timers[key] then removeEvent(rec.timers[key]) end
     rec.timers[key] = nil
   end
+  -- the next run is scheduled first, so one error does not end the timer
+  function api.every(ms, fn)
+    local key = {}
+    local function run()
+      rec.timers[key] = scheduleEvent(run, ms)
+      addonCall(rec, fn)
+    end
+    rec.timers[key] = scheduleEvent(run, math.max(50, tonumber(ms) or 1000))
+    return key
+  end
+  function api.style(file)
+    if type(file) ~= 'string' or not file:match('^[%w_%-]+%.otui$') then return false end
+    return (pcall(g_ui.importStyle, api.dir .. file))
+  end
+  function api.ui(style, parent)
+    local ok, w = pcall(g_ui.createWidget, style, parent or rootWidget)
+    if not ok or not w then return nil end
+    rec.widgets[#rec.widgets + 1] = w
+    return w
+  end
+  function api.connect(object, handlers)
+    local wrapped = {}
+    for name, fn in pairs(type(handlers) == 'table' and handlers or {}) do
+      if type(fn) == 'function' then wrapped[name] = function(...) return addonCall(rec, fn, ...) end end
+    end
+    connect(object, wrapped)
+    rec.connections[#rec.connections + 1] = { object, wrapped }
+  end
+  function api.button(tooltip, icon, fn)
+    local tm = modules.client_topmenu
+    if rec.button or type(fn) ~= 'function' or not (tm and tm.addRightGameToggleButton) then return rec.button end
+    local image = type(icon) == 'string' and icon:match('^[%w_%-]+$') and (api.dir .. icon) or '/images/topbuttons/analyzers'
+    rec.openFn = fn
+    rec.button = tm.addRightGameToggleButton('vwAddon' .. rec.id:gsub('%-', ''), tostring(tooltip or rec.id), image, function() addonCall(rec, fn) end, false, 950)
+    return rec.button
+  end
+  function api.load()
+    return me.dir and readJson(me.dir .. '/addon-data/' .. rec.id .. '.json') or {}
+  end
+  function api.save(t)
+    if not me.dir or type(t) ~= 'table' then return false end
+    local ok, text = pcall(json.encode, t)
+    if not ok then return false end
+    pcall(g_resources.makeDir, me.dir .. '/addon-data')
+    return write(me.dir .. '/addon-data/' .. rec.id .. '.json', text)
+  end
+  function api.setting(key) return addonSettings(rec)[key] end
+  function api.price(name) return type(name) == 'string' and priceOf(name:lower()) or nil end
+  function api.online() return ledger and math.floor(tonumber(ledger.onlineS) or 0) or 0 end
   return api
 end
 
@@ -215,7 +305,7 @@ local function scanAddons(force)
       seen[id] = true
       local version = (read(ADDON_DIR .. '/' .. id .. '/.version') or tostring(manifest.version or '?')):match('^%s*(.-)%s*$')
       local rec = addons[id]
-      local info = { name = manifest.name, about = manifest.about, points = manifest.points, plan = manifest.plan }
+      local info = { name = manifest.name, about = manifest.about, points = manifest.points, plan = manifest.plan, settings = manifest.settings }
       if off[id] then
         rec = rec or newAddon(id)
         addons[id] = rec
@@ -280,16 +370,39 @@ local function addonStates()
   return out
 end
 
+-- the addon's screenshots in this folder, by file name
+local function pictureFiles(id)
+  local out = {}
+  if type(id) ~= 'string' or not id:match('^[%w%-]+$') then return out end
+  local ok, names = pcall(g_resources.listDirectoryFiles, ADDON_PICTURES .. '/' .. id)
+  for _, n in ipairs(ok and type(names) == 'table' and names or {}) do
+    n = tostring(n)
+    if n:match('^[%w_%-]+%.png$') then out[#out + 1] = n end
+  end
+  table.sort(out)
+  return out
+end
+Voidwatch.pictureFiles = pictureFiles
+
 local function addonView()
   local off, out = offHere(), addonStates()
   for _, st in ipairs(out) do
     local rec = addons[st.id]
     st.here = not off[st.id]
     st.log = rec and rec.log or {}
-    st.canOpen = rec ~= nil and rec.loaded == true and type(rec.handlers.open) == 'function'
+    st.canOpen = rec ~= nil and rec.loaded == true and (type(rec.handlers.open) == 'function' or rec.openFn ~= nil)
     st.broken = rec ~= nil and rec.off == true
     st.errors = rec and rec.errors or 0
     st.info = rec and rec.info or nil
+    st.settings = {}
+    if rec then
+      local values = addonSettings(rec)
+      for _, d in ipairs(declaredSettings(rec)) do
+        st.settings[#st.settings + 1] = { key = d.key, type = d.type, label = tostring(d.label or d.key), min = tonumber(d.min), max = tonumber(d.max),
+                                          options = type(d.options) == 'table' and d.options or nil, value = values[d.key] }
+      end
+    end
+    st.pictures = pictureFiles(st.id)
   end
   return out
 end
@@ -332,6 +445,7 @@ local function addLoot(source, name, count)
   end
   items[name] = (items[name] or 0) + count
   ledgerDirty = true
+  emitAddons('loot', source, name, count)
 end
 
 local function dropLoot(source, name)
@@ -550,7 +664,7 @@ local function onOpenNpcTrade(items)
   if changed then write(ROOT .. '/prices.json', json.encode(all)) end
 end
 
-local function priceOf(name) return COINS[name] or (prices and tonumber(prices.sell[name])) or nil end
+function priceOf(name) return COINS[name] or (prices and tonumber(prices.sell[name])) or nil end
 local function buyPriceOf(name) return prices and tonumber(prices.buy[name]) or nil end
 
 local function provides(def, name)
@@ -965,6 +1079,7 @@ local function step()
     carried, carriedDirty = type(saved) == 'table' and saved or {}, false
     startAdapters()
     scanAddons(true)
+    emitAddons('login', name)
   end
   local now0 = g_clock.millis()
   if me.lastTick then
@@ -1192,6 +1307,7 @@ end
 
 local function onGameEnd()
   if me.dir then pcall(g_resources.deleteFile, me.dir .. '/plan.json') end
+  emitAddons('logout')
 end
 
 function Voidwatch.attachBot(def)
@@ -1432,8 +1548,47 @@ end
 
 function Voidwatch.openAddon(id)
   local rec = addons[id]
-  local fn = rec and rec.loaded and rec.handlers.open
+  local fn = rec and rec.loaded and (rec.handlers.open or rec.openFn)
   return fn and addonCall(rec, fn) or false
+end
+
+function Voidwatch.setAddonSetting(id, key, value)
+  local rec, file = addons[id], me.dir and (me.dir .. '/addon-settings.json')
+  if not rec or not file then return false end
+  local decl
+  for _, s in ipairs(declaredSettings(rec)) do
+    if s.key == key then decl = s end
+  end
+  if decl and decl.type == 'number' then value = tonumber(value) end
+  if not decl or not settingFits(decl, value) then return false end
+  local all = readJson(file) or {}
+  all[id] = type(all[id]) == 'table' and all[id] or {}
+  all[id][key] = value
+  if not write(file, json.encode(all)) then return false end
+  local fn = rec.loaded and rec.handlers.settings
+  if fn then addonCall(rec, fn, addonSettings(rec)) end
+  return true
+end
+
+function Voidwatch.picturePath(id, file) return ADDON_PICTURES .. '/' .. tostring(id) .. '/' .. tostring(file) end
+
+-- asks the upload script for the pictures the website lists for an addon and this folder does not have, at most once a minute
+local pictureAsk = {}
+function Voidwatch.wantPictures(id, pictures)
+  if type(id) ~= 'string' or not id:match('^[%w%-]+$') or type(pictures) ~= 'table' then return false end
+  local now = g_clock.millis()
+  if pictureAsk[id] and now - pictureAsk[id] < 60000 then return false end
+  local have, lines = {}, {}
+  for _, n in ipairs(pictureFiles(id)) do have[n] = true end
+  local prefix = '/static/img/addons/' .. id .. '/'
+  for _, pic in ipairs(pictures) do
+    local src = type(pic) == 'table' and tostring(pic.src or '') or ''
+    local file = src:sub(1, #prefix) == prefix and src:sub(#prefix + 1) or ''
+    if file:match('^[%w_%-]+%.png$') and not have[file] then lines[#lines + 1] = id .. ' ' .. file .. ' ' .. src end
+  end
+  if #lines == 0 then return false end
+  pictureAsk[id] = now
+  return write(ROOT .. '/addon-pictures-wanted.txt', (read(ROOT .. '/addon-pictures-wanted.txt') or '') .. table.concat(lines, '\n') .. '\n')
 end
 
 -- the window's Settings tab; the website applies the values with the rules of its Clients page

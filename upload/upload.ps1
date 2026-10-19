@@ -8,6 +8,7 @@ $Home_ = Join-Path $env:LOCALAPPDATA 'Voidwatch'
 # module updates come from the GitHub releases, not from the website: a broken-into website cannot ship code
 $Releases = if ($env:VOIDWATCH_RELEASES) { $env:VOIDWATCH_RELEASES } else { 'https://github.com/voidwatch-xyz/module/releases' }
 $LatestApi = if ($env:VOIDWATCH_LATEST) { $env:VOIDWATCH_LATEST } else { 'https://api.github.com/repos/voidwatch-xyz/module/releases/latest' }
+$Site = $(if ($env:VOIDWATCH_API) { $env:VOIDWATCH_API } else { 'https://voidwatch.xyz/api/v1' }) -replace '/api/v1/?$', ''
 
 if (-not $Worker) {
   $latest = ''; $latestAt = [datetime]::MinValue
@@ -120,6 +121,27 @@ if (-not $Worker) {
       if ($wanted -notcontains $p.Name) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $p.FullName }
     }
   }
+  # the pictures the Voidwatch window asks for: lines "id file path", only addon pictures from the website, PNG, 2 MB at most
+  function Fetch-Pictures($d) {
+    $w = Join-Path $d 'addon-pictures-wanted.txt'
+    foreach ($line in @(Get-Content $w -ErrorAction SilentlyContinue)) {
+      $parts = @("$line".Trim() -split '\s+')
+      if ($parts.Count -ne 3) { continue }
+      $id, $file, $src = $parts
+      if ($id -notmatch '^[a-z0-9-]+$' -or $file -notmatch '^[A-Za-z0-9_-]+\.png$' -or $src -cne "/static/img/addons/$id/$file") { continue }
+      $dir = Join-Path $d "addon-pictures\$id"; $out = Join-Path $dir $file
+      if (Test-Path $out) { continue }
+      try {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri ($Site + $src) -OutFile "$out.part"
+        $b = [IO.File]::ReadAllBytes("$out.part")
+        if ($b.Length -ge 8 -and $b.Length -le 2097152 -and $b[0] -eq 0x89 -and $b[1] -eq 0x50 -and $b[2] -eq 0x4E -and $b[3] -eq 0x47) {
+          Move-Item -Force "$out.part" $out
+        } else { Remove-Item -Force -ErrorAction SilentlyContinue "$out.part" }
+      } catch { Remove-Item -Force -ErrorAction SilentlyContinue "$out.part" }
+    }
+    Remove-Item -Force -ErrorAction SilentlyContinue $w
+  }
   function Rollback-Module($d) {
     $m = Module-Of $d; $b = Join-Path $d 'backup'
     $req = Get-Content (Join-Path $d 'rollback-request.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
@@ -171,6 +193,7 @@ if (-not $Worker) {
       if ($writable -and (Test-Path (Join-Path $d 'update-request.json'))) { Update-Module $d }
       if ($writable -and (Test-Path (Join-Path $d 'rollback-request.json'))) { Rollback-Module $d }
       if (Test-Path (Join-Path $d 'addons-wanted.json')) { Sync-Addons $d }
+      if (Test-Path (Join-Path $d 'addon-pictures-wanted.txt')) { Fetch-Pictures $d }
     }
     if ($restartSelf) {
       # the new script takes over: the workers stop, and a new hidden main script starts them again

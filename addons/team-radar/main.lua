@@ -47,15 +47,18 @@ local function place(m, z)
   minimap:centerInPosition(m.label, { x = m.x, y = m.y, z = z })
 end
 
+local lastReply
 local function update(reply)
   if type(reply) ~= 'table' or type(reply.radar) ~= 'table' then return end
+  lastReply = reply
+  local guild = not (Addon.setting and Addon.setting('guild') == false)
   minimap = minimap or Addon.minimap()
   if not minimap then return end
   local z, seen = viewedFloor(), {}
   for i, r in ipairs(reply.radar) do
     if i > MAX_MARKS then break end
     local name, x, y, rz = type(r) == 'table' and tostring(r.name or '') or '', tonumber(r.x), tonumber(r.y), tonumber(r.z)
-    if name ~= '' and x and y and rz then
+    if name ~= '' and x and y and rz and (guild or r.kind ~= 'guild') then
       seen[name] = true
       local m = marks[name] or make(name)
       m.x, m.y, m.z, m.kind = x, y, rz, r.kind == 'guild' and 'guild' or 'own'
@@ -86,6 +89,7 @@ end
 function init()
   minimap = Addon.minimap()
   Addon.on('reply', update)
+  Addon.on('settings', function() if lastReply then update(lastReply) end end)
   if minimap then connect(minimap, { onCameraPositionChange = onCamera }) end
   timer = Addon.after(CHECK_MS, check)
 end

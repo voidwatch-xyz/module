@@ -17,11 +17,13 @@ local TEAM = {
   { 'chat', 'Sync private messages', 'Off: private chats stay in the game client.' },
 }
 local ROLES = { 'hunt', 'refill', 'city', 'resp' }
-local WIDTH, HEIGHT, MIN_HEIGHT, SCREEN_GAP, SPACING = 720, 370, 340, 60, 3
+local WIDTH, HEIGHT, MIN_HEIGHT, SCREEN_GAP, SPACING = 760, 370, 340, 60, 3
 local button, dot, win, timer, styled, lastState, site
 local pages, tabButtons, shapes, refs = {}, {}, {}, {}
 local current = 'main'                                 -- the open tab, kept while the client runs
 local detail = nil                                     -- the addon the Addons tab shows
+local subtab = 'about'                                 -- the part of the addon details that shows
+local picIndex = {}                                    -- addon id -> the picture its details show
 local form = nil                                       -- the Settings tab while the player edits it
 local syncing = false
 local render
@@ -362,7 +364,7 @@ local function addonList(v)
   for _, a in ipairs(v.addonCatalog or {}) do
     if type(a) == 'table' and type(a.id) == 'string' and not byId[a.id] then
       local e = { id = a.id, name = tostring(a.name or a.id), about = tostring(a.about or ''), points = type(a.points) == 'table' and a.points or {},
-                  plan = a.plan, size = tonumber(a.size), latest = a.version }
+                  plan = a.plan, size = tonumber(a.size), latest = a.version, pictures = type(a.pictures) == 'table' and a.pictures or {} }
       byId[a.id] = e
       out[#out + 1] = e
     end
@@ -370,7 +372,7 @@ local function addonList(v)
   for _, st in ipairs(v.addons or {}) do
     local e = byId[st.id]
     if not e then
-      e = { id = st.id, name = st.id, about = '', points = {} }
+      e = { id = st.id, name = st.id, about = '', points = {}, pictures = {} }
       byId[st.id] = e
       out[#out + 1] = e
     end
@@ -417,7 +419,8 @@ local function addonsShape(v)
   for _, e in ipairs(list) do
     local st = e.st or {}
     parts[#parts + 1] = table.concat({ e.id, tostring(e.st ~= nil), tostring(st.here), tostring(st.on), tostring(st.broken), tostring(st.canOpen),
-      tostring(e.newer), tostring(#(st.log or {})), tostring(st.error), tostring(st.version), tostring(#e.about) }, ':')
+      tostring(e.newer), tostring(#(st.log or {})), tostring(st.error), tostring(st.version), tostring(#e.about), tostring(#(st.settings or {})),
+      tostring(#Voidwatch.pictureFiles(e.id)) }, ':')
   end
   return table.concat(parts, '|')
 end
@@ -468,6 +471,99 @@ local function buildItems(a, v, list, sel)
   a.list.website.onClick = function() g_platform.openUrl((site or SITE) .. '/dashboard/addons') end
 end
 
+-- the website's caption for one picture file, matched by its name
+local function captionOf(e, file)
+  for _, p in ipairs(e.pictures or {}) do
+    if type(p) == 'table' and tostring(p.src or ''):sub(-#file - 1) == '/' .. file then return tostring(p.caption or '') end
+  end
+  return ''
+end
+
+local function openPicture(e, files, i)
+  if refs.picWin and not refs.picWin:isDestroyed() then refs.picWin:destroy() end
+  local w = g_ui.createWidget('VwPictureWindow', rootWidget)
+  refs.picWin = w
+  w:setText(e.name)
+  local function show(k)
+    i = (k - 1) % #files + 1
+    w.frame.img:setImageSource(Voidwatch.picturePath(e.id, files[i]))
+    w.caption:setText(captionOf(e, files[i]))
+    w.count:setText(i .. ' / ' .. #files)
+  end
+  for key, step in pairs({ prev = -1, next = 1 }) do
+    w.frame[key]:setText(step < 0 and '<' or '>')
+    w.frame[key]:setVisible(#files > 1)
+    w.frame[key].onClick = function() show(i + step) end
+  end
+  w.closeButton.onClick = function() w:destroy() end
+  w.onEscape = function() w:destroy() end
+  show(i)
+  w:show()
+  w:raise()
+  w:focus()
+end
+
+-- the picture beside the details, changed in place so the page does not draw again
+local function showPicture(d, e, files)
+  local has = #files > 0
+  local i = math.min(math.max(1, picIndex[e.id] or 1), math.max(1, #files))
+  d.pic.img:setVisible(has)
+  d.pic.icon:setVisible(not has)
+  d.pic.picText:setVisible(not has)
+  d.pic.picCount:setText(has and (i .. ' / ' .. #files) or '0 / 0')
+  if has then
+    d.pic.img:setImageSource(Voidwatch.picturePath(e.id, files[i]))
+    d.pic.img:setTooltip(captionOf(e, files[i]))
+    d.pic.img.onClick = function() openPicture(e, files, i) end
+  end
+  for key, step in pairs({ prev = -1, next = 1 }) do
+    d.pic[key]:setText(step < 0 and '<' or '>')
+    d.pic[key]:setVisible(#files > 1)
+    d.pic[key].onClick = function()
+      picIndex[e.id] = (i - 1 + step) % #files + 1
+      showPicture(d, e, files)
+    end
+  end
+end
+
+local function showSub(d)
+  local keys = {}
+  for _, tab in ipairs(d.subtabs.tabs or {}) do keys[tab.vwKey] = true end
+  if not keys[subtab] then subtab = 'about' end
+  d.sub.points:setVisible(subtab == 'about')
+  d.sub.settings:setVisible(subtab == 'settings')
+  d.sub.log:setVisible(subtab == 'errors' and d.sub.log:getChildCount() > 0)
+  d.sub.none:setVisible(subtab == 'errors' and d.sub.log:getChildCount() == 0)
+end
+
+local function settingControls(panel, e, list)
+  for _, s in ipairs(list) do
+    if s.type == 'bool' then
+      local box = make('VwCheck', panel, s.label)
+      box:setChecked(s.value == true)
+      box.onCheckChange = function(_, on) pcall(Voidwatch.setAddonSetting, e.id, s.key, on) end
+    elseif s.type == 'number' then
+      local row = make('VwNumber', panel)
+      row.key:setText(s.label)
+      row.unit:setText('')
+      pcall(function()
+        row.value:setMinimum(s.min or 0)
+        row.value:setMaximum(s.max or 1000000)
+        row.value:setValue(tonumber(s.value) or s.min or 0)
+      end)
+      row.value.onValueChange = function(_, n) pcall(Voidwatch.setAddonSetting, e.id, s.key, tonumber(n)) end
+    elseif s.type == 'choice' then
+      local row = make('VwChoice', panel)
+      row.key:setText(s.label)
+      pcall(function()
+        for _, o in ipairs(s.options or {}) do row.value:addOption(tostring(o)) end
+        row.value:setCurrentOption(tostring(s.value))
+      end)
+      row.value.onOptionChange = function(_, text) pcall(Voidwatch.setAddonSetting, e.id, s.key, text) end
+    end
+  end
+end
+
 local function buildDetail(a, v, e)
   local card = a.detail
   card:destroyChildren()
@@ -510,20 +606,35 @@ local function buildDetail(a, v, e)
   end
   d.bar.remove:setVisible(st ~= nil)
   click(d.bar.remove, function() Voidwatch.removeAddon(e.id) end)
+  -- the folder's picture files; the website lists the ones it has, and the upload script brings the missing ones
+  if #e.pictures > 0 then pcall(Voidwatch.wantPictures, e.id, e.pictures) end
+  showPicture(d, e, Voidwatch.pictureFiles(e.id))
   for i, p in ipairs(e.points) do
-    local w = make('VwPoint', i % 2 == 1 and d.points.colA or d.points.colB)
+    local w = make('VwPoint', i % 2 == 1 and d.sub.points.colA or d.sub.points.colB)
     w.vwText = tostring(p)
     w:setTooltip(w.vwText)
   end
+  local settings = st and st.settings or {}
+  settingControls(d.sub.settings, e, settings)
   local log = st and st.log or {}
-  d.errHead:setVisible(st ~= nil)
-  d.errNone:setVisible(st ~= nil and #log == 0)
-  d.errNone:setText('none since the addon started')
-  d.log:setVisible(st ~= nil and #log > 0)
   for _, item in ipairs(log) do
-    local l = make('VwLogLine', d.log, os.date('%H:%M:%S', item.at) .. '   ' .. short(item.text, 80))
+    local l = make('VwLogLine', d.sub.log, os.date('%H:%M:%S', item.at) .. '   ' .. short(item.text, 90))
     l:setTooltip(tostring(item.text))
   end
+  d.sub.none:setText('No errors since the addon started.')
+  local tabs = { { 'about', 'About' } }
+  if #settings > 0 then tabs[#tabs + 1] = { 'settings', 'Settings' } end
+  if st then tabs[#tabs + 1] = { 'errors', 'Errors ' .. #log } end
+  for _, t in ipairs(tabs) do
+    local tab = d.subtabs:addTab(t[2], g_ui.createWidget('UIWidget'))
+    tab.vwKey = t[1]
+    if t[1] == subtab then d.subtabs:selectTab(tab) end
+  end
+  d.subtabs.onTabChange = function(_, tab)
+    subtab = tab.vwKey or 'about'
+    showSub(d)
+  end
+  showSub(d)
   refs.detail = d
 end
 
@@ -536,7 +647,7 @@ local function buildAddons(page, v)
   buildDetail(a, v, sel)
 end
 
--- the two columns of points get their width from the card, so each wrapped point knows its height
+-- the two columns of points get their width from the card, and each point is cut to it
 local function fillAddons()
   local a = refs.addonsPage
   if not a then return end
@@ -546,19 +657,14 @@ local function fillAddons()
   if not d or d:isDestroyed() then return end
   local colW = math.floor((a.detail:getWidth() - a.detail:getPaddingLeft() - a.detail:getPaddingRight() - 14) / 2)
   if colW <= 0 then return end
-  local tallest = 0
-  for _, col in ipairs({ d.points.colA, d.points.colB }) do
-    local h = 0
-    for i, w in ipairs(col:getChildren()) do
+  for _, col in ipairs({ d.sub.points.colA, d.sub.points.colB }) do
+    for _, w in ipairs(col:getChildren()) do
       w:setWidth(colW)
       w.text:setWidth(colW - 10)
       w.text:setText(short(w.vwText, math.floor((colW - 10) / 6)))
-      h = h + w:getHeight() + (i > 1 and 3 or 0)
     end
-    tallest = math.max(tallest, h)
   end
-  d.points:setHeight(math.max(1, tallest))
-  d.points:setMarginTop(tallest > 0 and 9 or 0)
+  fitWidths(d.sub.settings)
 end
 
 -- Settings tab ----------------------------------------------------------------------------------------------------
@@ -743,6 +849,7 @@ end
 
 local function close()
   if timer then removeEvent(timer) end
+  if refs.picWin and not refs.picWin:isDestroyed() then refs.picWin:destroy() end
   timer, refs, shapes, pages, tabButtons, form = nil, {}, {}, {}, {}, nil
   if win then win:destroy() end
   win = nil
