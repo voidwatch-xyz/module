@@ -111,6 +111,25 @@ if [ "${1:-}" != --worker ]; then
       case " $wanted " in *" $id "*) ;; *) rm -rf "${d:?}/addons/$id" ;; esac
     done
   }
+  # the pictures the Voidwatch window asks for: lines "id file path", only addon pictures from the website, PNG, 2 MB at most
+  fetch_pictures() {
+    d=${1%/} w="${1%/}/addon-pictures-wanted.txt"
+    while read -r id file src; do
+      case "$id" in "" | *[!a-z0-9-]*) continue ;; esac
+      case "$file" in "" | *[!A-Za-z0-9_.-]* | .*) continue ;; *.png) ;; *) continue ;; esac
+      [ "$src" = "/static/img/addons/$id/$file" ] || continue
+      out="$d/addon-pictures/$id/$file"
+      [ -f "$out" ] && continue
+      mkdir -p "$d/addon-pictures/$id" || continue
+      if curl -sSfL -m 30 --max-filesize 2097152 -o "$out.part" "${API%/api/v1}$src" 2>/dev/null \
+        && [ "$(wc -c < "$out.part")" -le 2097152 ] && [ "$(head -c 8 "$out.part" | od -An -tx1 | tr -d ' \n')" = "89504e470d0a1a0a" ]; then
+        mv -f "$out.part" "$out"
+      else
+        rm -f "$out.part"
+      fi
+    done < "$w"
+    rm -f "$w"
+  }
   rollback_module() {
     d=${1%/} m=$(module_of "$1")
     by=$(sed -n 's/.*"by": *"\([^"]*\)".*/\1/p' "$d/rollback-request.json" | head -n 1)
@@ -159,6 +178,7 @@ if [ "${1:-}" != --worker ]; then
       [ "$writable" = true ] && [ -f "${d%/}/update-request.json" ] && update_module "$d"
       [ "$writable" = true ] && [ -f "${d%/}/rollback-request.json" ] && rollback_module "$d"
       [ -f "${d%/}/addons-wanted.json" ] && sync_addons "$d"
+      [ -f "${d%/}/addon-pictures-wanted.txt" ] && fetch_pictures "$d"
     done
     if [ -f "$HOME_DIR/.restart" ]; then
       # the new script takes over: the workers stop, and the login item or the service starts the new one
