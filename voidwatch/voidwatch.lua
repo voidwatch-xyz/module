@@ -13,6 +13,7 @@
 --   plan.json                   the bot's running plan, so a bot reload keeps it; removed at logout
 --   outbox/exiva.json           the player's own exiva cast and its answer, which starts a team exiva
 --   addons-wanted.json          the addons this folder wants; the upload script puts them in addons/<id>/
+--   addons-off.json             the addons turned off for this character, in its own folder
 -- Everything the stock client knows, the module reads itself. The rest comes from adapters (/developers/new-server):
 --   Voidwatch.register(adapter)    a server adapter in this module, for example orion.lua; it runs only on its server
 --   Voidwatch.attachBot(adapter)   the bot adapter, a script in the bot's config folder; it attaches every 10 s
@@ -24,7 +25,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.13.1'
+local MODULE = 'voidwatch-feed/0.14.0'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -49,6 +50,7 @@ local GUARD_LUA_MB = 200                                -- growth of the heap fl
 local GUARD_PROCESS_MB = 1400                           -- process memory that stops the module
 local MAX_ERRORS = 10                                   -- errors in a row that stop the module
 local SETUP_HINT_MS = 20000                             -- no answer from the upload script this long after login
+local SETTINGS_RESEND_S = 2                             -- the status pace while a change from the window waits for the website
 
 local SKULLS = { [SkullWhite or 3] = 'white', [SkullRed or 4] = 'red', [SkullBlack or 5] = 'black', [SkullYellow or 1] = 'yellow',
                  [SkullGreen or 2] = 'green', [SkullOrange or 6] = 'orange' }
@@ -105,14 +107,24 @@ local function mb(bytes) return math.floor(bytes / 1048576) end
 local ADDON_DIR = ROOT .. '/addons'
 local ADDON_ERRORS = 10
 local ADDON_SCAN_MS = 5000
-local addons, addonScanAt = {}, -math.huge              -- id -> { id, version, env, handlers, timers, errors, off, error, loaded }
+local ADDON_LOG = 20
+local OFF_HERE = 'off for this character'
+local addons, addonScanAt = {}, -math.huge              -- id -> { id, version, env, handlers, timers, errors, off, error, loaded, here, log }
 local unloadAddon
+
+local function newAddon(id) return { id = id, errors = 0, timers = {}, handlers = {}, log = {} } end
+
+local function addonLog(rec, text)
+  table.insert(rec.log, 1, { at = os.time(), text = text })
+  rec.log[ADDON_LOG + 1] = nil
+end
 
 local function addonCall(rec, fn, ...)
   if rec.off then return false end
   local ok, err = pcall(fn, ...)
   if ok then rec.errors = 0; return true end
   rec.errors, rec.error = rec.errors + 1, tostring(err):sub(1, 200)
+  addonLog(rec, rec.error)
   log(('addon %s: %s'):format(rec.id, rec.error))
   if rec.errors >= ADDON_ERRORS then
     unloadAddon(rec)
@@ -149,15 +161,16 @@ local function addonApi(rec)
 end
 
 local function loadAddon(id, version)
-  local rec = addons[id] or { id = id, errors = 0, timers = {}, handlers = {} }
+  local rec = addons[id] or newAddon(id)
   addons[id] = rec
   if rec.loaded then unloadAddon(rec) end
-  rec.version, rec.off, rec.errors, rec.error = version, false, 0, nil
+  rec.version, rec.off, rec.errors, rec.error, rec.here = version, false, 0, nil, true
   local src = read(ADDON_DIR .. '/' .. id .. '/main.lua')
   local chunk, err = nil, 'no main.lua'
   if src then chunk, err = loadstring(src, '@addons/' .. id .. '/main.lua') end
   if not chunk then
     rec.off, rec.error = true, tostring(err):sub(1, 200)
+    addonLog(rec, rec.error)
     return
   end
   local env = setmetatable({ Addon = addonApi(rec) }, { __index = getfenv(1) })
@@ -179,12 +192,20 @@ local function wantedAddons()
   return w and type(w.ids) == 'table' and w.ids or {}
 end
 
+local function offHere()
+  local w = me.dir and readJson(me.dir .. '/addons-off.json')
+  local out = {}
+  for _, id in ipairs(w and type(w.ids) == 'table' and w.ids or {}) do out[tostring(id)] = true end
+  return out
+end
+
 local function scanAddons(force)
+  if not me.dir then return end
   local now = g_clock.millis()
   if not force and now - addonScanAt < ADDON_SCAN_MS then return end
   addonScanAt = now
   if g_resources.fileExists(ROOT .. '/addons-off') then return stopAllAddons() end
-  local wanted, seen = {}, {}
+  local wanted, seen, off = {}, {}, offHere()
   for _, id in ipairs(wantedAddons()) do wanted[tostring(id)] = true end
   local ok, names = pcall(g_resources.listDirectoryFiles, ADDON_DIR)
   for _, id in ipairs(ok and type(names) == 'table' and names or {}) do
@@ -194,7 +215,16 @@ local function scanAddons(force)
       seen[id] = true
       local version = (read(ADDON_DIR .. '/' .. id .. '/.version') or tostring(manifest.version or '?')):match('^%s*(.-)%s*$')
       local rec = addons[id]
-      if not rec or rec.version ~= version or (not rec.off and not rec.loaded) then loadAddon(id, version) end
+      local info = { name = manifest.name, about = manifest.about, points = manifest.points, plan = manifest.plan }
+      if off[id] then
+        rec = rec or newAddon(id)
+        addons[id] = rec
+        if rec.loaded then unloadAddon(rec) end
+        rec.version, rec.here = version, false
+      elseif not rec or rec.version ~= version or rec.here == false or (not rec.off and not rec.loaded) then
+        loadAddon(id, version)
+      end
+      addons[id].info = info
     end
   end
   for id, rec in pairs(addons) do
@@ -222,15 +252,45 @@ local function setWanted(id, on)
   return write(ROOT .. '/addons-wanted.json', json.encode({ ids = out }))
 end
 
+local SETTING_KINDS = { captures = 'boolean', minimap = 'boolean', supplyList = 'boolean', commands = 'boolean', exiva = 'boolean',
+                        exivaShowAll = 'boolean', chat = 'boolean', planWait = 'number', labels = 'table' }
+local SETTING_DEFAULTS = { captures = true, minimap = true, supplyList = true, commands = true, exiva = false, exivaShowAll = false,
+                           chat = true, planWait = 20, labels = {} }
+
+-- a change saved in the window counts at once; a reply from before the website took it must not undo it
+local function withChange(settings)
+  if not me.change then return settings end
+  local out = {}
+  for k, v in pairs(settings) do out[k] = v end
+  for k, v in pairs(me.change.values) do out[k] = v end
+  return out
+end
+
 local function addonStates()
   local out = {}
-  for id, rec in pairs(addons) do out[#out + 1] = { id = id, version = rec.version, on = rec.loaded == true, error = rec.error } end
+  for id, rec in pairs(addons) do
+    out[#out + 1] = { id = id, version = rec.version, on = rec.loaded == true, error = rec.here == false and OFF_HERE or rec.error }
+  end
   for _, id in ipairs(wantedAddons()) do
     if not addons[id] then
       out[#out + 1] = { id = id, on = false, error = g_resources.fileExists(ADDON_DIR .. '/.failed-' .. id) and 'the download failed' or 'installing' }
     end
   end
   table.sort(out, function(a, b) return a.id < b.id end)
+  return out
+end
+
+local function addonView()
+  local off, out = offHere(), addonStates()
+  for _, st in ipairs(out) do
+    local rec = addons[st.id]
+    st.here = not off[st.id]
+    st.log = rec and rec.log or {}
+    st.canOpen = rec ~= nil and rec.loaded == true and type(rec.handlers.open) == 'function'
+    st.broken = rec ~= nil and rec.off == true
+    st.errors = rec and rec.errors or 0
+    st.info = rec and rec.info or nil
+  end
   return out
 end
 
@@ -904,6 +964,7 @@ local function step()
     local saved = readJson(me.dir .. '/carried.json')
     carried, carriedDirty = type(saved) == 'table' and saved or {}, false
     startAdapters()
+    scanAddons(true)
   end
   local now0 = g_clock.millis()
   if me.lastTick then
@@ -928,12 +989,19 @@ local function step()
   reply = okReply and type(reply) == 'table' and reply or {}
   if fresh and tonumber(reply.at) then me.serverAt, me.serverLocal = tonumber(reply.at), os.time() end
   me.reply = reply
-  me.settings = type(reply.settings) == 'table' and reply.settings or {}
+  local saved = type(reply.settingsSaved) == 'table' and reply.settingsSaved
+  if saved and me.change and tonumber(saved.rev) == me.change.rev then
+    me.saved = { ok = saved.ok ~= false, error = saved.error and tostring(saved.error):sub(1, 200) or nil, at = g_clock.millis() }
+    me.change = nil
+  end
+  me.settings = withChange(type(reply.settings) == 'table' and reply.settings or {})
   if fresh then emitAddons('reply', reply) end
   local now = g_clock.millis()
-  if now - me.lastStatus >= (tonumber(reply.statusEvery) or 30) * 1000 then
+  local every = me.change and SETTINGS_RESEND_S or tonumber(reply.statusEvery) or 30
+  if now - me.lastStatus >= every * 1000 then
     local s = state(p)
     if s then
+      if me.change then s.settingsChange = { rev = me.change.rev, values = me.change.values } end
       me.lastStatus, me.last = now, s
       if not paired then
         local host, world, version = origin()
@@ -1309,6 +1377,9 @@ function Voidwatch.view()
   end
   local okMem, bytes = pcall(g_platform.getMemoryUsage)
   local settings = me.settings or {}
+  local full = {}
+  for k, v in pairs(SETTING_DEFAULTS) do full[k] = v end
+  for k, v in pairs(settings) do if SETTING_KINDS[k] then full[k] = v end end
   return {
     state = stateOf(), version = MODULE:match('/(.+)$') or MODULE, stopped = halted,
     character = p and p:getName() or nil, server = me.serverName or (g_game.getWorldName and g_game.getWorldName()) or nil,
@@ -1319,8 +1390,10 @@ function Voidwatch.view()
     suppliesSource = me.last and me.last.suppliesSource or nil, commands = COMMANDS,
     routeName = me.last and me.last.route or nil, phase = me.last and me.last.phase or nil, labelsMissing = me.last and me.last.labelsMissing or nil,
     plan = p and field('plan') or nil,
-    addons = addonStates(), addonsOff = g_resources.fileExists(ROOT .. '/addons-off'),
+    addons = addonView(), addonsOff = g_resources.fileExists(ROOT .. '/addons-off'),
     addonCatalog = me.reply and type(me.reply.addonCatalog) == 'table' and me.reply.addonCatalog or {},
+    settings = full, settingsPending = me.change ~= nil,
+    settingsSaved = me.saved and { ok = me.saved.ok, error = me.saved.error, ago = math.floor((now - me.saved.at) / 1000) } or nil,
     heapMB = math.floor(collectgarbage('count') / 1024), clientMB = okMem and type(bytes) == 'number' and mb(bytes) or nil,
     errors = errors, lastError = lastError, sources = sources(), dir = g_resources.getWriteDir() .. ROOT:sub(2),
     update = {
@@ -1336,6 +1409,54 @@ end
 
 function Voidwatch.installAddon(id) return Voidwatch.actions.addon_install({ addon = id }) end
 function Voidwatch.removeAddon(id) return Voidwatch.actions.addon_remove({ addon = id }) end
+
+function Voidwatch.setAddonHere(id, on)
+  id = type(id) == 'string' and id:match('^[%w%-]+$')
+  if not id or not me.dir then return false end
+  local off, ids = offHere(), {}
+  off[id] = not on or nil
+  for x in pairs(off) do ids[#ids + 1] = x end
+  table.sort(ids)
+  local ok = write(me.dir .. '/addons-off.json', json.encode({ ids = ids }))
+  scanAddons(true)
+  return ok
+end
+
+-- also starts an addon again after its errors stopped it
+function Voidwatch.reloadAddon(id)
+  local rec = addons[id]
+  if not rec or rec.here == false or g_resources.fileExists(ROOT .. '/addons-off') then return false end
+  loadAddon(id, rec.version)
+  return rec.loaded == true and not rec.off
+end
+
+function Voidwatch.openAddon(id)
+  local rec = addons[id]
+  local fn = rec and rec.loaded and rec.handlers.open
+  return fn and addonCall(rec, fn) or false
+end
+
+-- the window's Settings tab; the website applies the values with the rules of its Clients page
+function Voidwatch.saveSettings(values)
+  if type(values) ~= 'table' or not me.dir or not me.saidPaired then return false end
+  local merged = me.change and me.change.values or {}
+  local any = false
+  for k, v in pairs(values) do
+    local kind = SETTING_KINDS[k]
+    if kind == 'number' then v = tonumber(v) and math.floor(tonumber(v)) or nil end
+    if kind == 'table' and type(v) == 'table' then
+      local roles = {}
+      for _, role in ipairs({ 'hunt', 'refill', 'city', 'resp' }) do roles[role] = type(v[role]) == 'string' and v[role] or '' end
+      v = roles
+    end
+    if kind and type(v) == kind then merged[k], any = v, true end
+  end
+  if not any then return false end
+  me.change = { rev = math.max(os.time(), (me.changeRev or 0) + 1), values = merged }
+  me.changeRev, me.saved, me.lastStatus = me.change.rev, nil, -math.huge
+  me.settings = withChange(me.settings or {})
+  return true
+end
 
 -- the off file stops every addon in every client that shares this folder, until it starts them again
 function Voidwatch.stopAddons()
