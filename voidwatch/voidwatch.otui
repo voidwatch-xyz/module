@@ -692,6 +692,23 @@ VwChoice < Panel
     margin-left: 8
     size: 130 20
 
+VwTextSetting < Panel
+  height: 20
+
+  Label
+    id: key
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    color: #9b9b9b
+    text-auto-resize: true
+
+  TextEdit
+    id: value
+    anchors.left: key.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 8
+    size: 130 20
+
 VwPictureWindow < MainWindow
   size: 660 470
 

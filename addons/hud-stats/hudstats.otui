@@ -1,0 +1,131 @@
+HudStatsHeader < GameLabel
+  height: 14
+  text-align: center
+  phantom: false
+
+HudStatsGraph < UIGraph
+  height: 40
+  capacity: 900
+  line-width: 1
+  margin-top: 3
+  background-color: #383636
+  padding: 3
+  font: verdana-11px-rounded
+  show-labels: false
+  image-source: /images/ui/graph_background
+
+HudStatsGraphLabel < UILabel
+  font: verdana-9px
+  color: #c8c8c8
+  text-auto-resize: true
+  margin-right: 2
+  phantom: true
+
+HudStatsRow < Panel
+  height: 14
+
+  GameLabel
+    id: name
+    anchors.left: parent.left
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+
+  GameLabel
+    id: value
+    text-align: topright
+    anchors.right: parent.right
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    anchors.left: prev.right
+
+HudStatsWindow < MiniWindow
+  id: vwStatsWindow
+  text: Stats
+  height: 330
+  icon: /images/topbuttons/analyzers
+
+  MiniWindowContents
+    id: contentsPanel
+    padding-left: 5
+    padding-right: 5
+    padding-top: 2
+    layout: verticalBox
+
+HudStatsButtons < Panel
+  height: 74
+  margin-top: 8
+
+  Button
+    id: graphs
+    text: Hide graphs
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.top: parent.top
+    height: 20
+
+  Button
+    id: resetSession
+    text: Reset session
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.top: prev.bottom
+    margin-top: 6
+    height: 20
+
+  Button
+    id: resetLifetime
+    text: Reset lifetime
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.top: prev.bottom
+    margin-top: 6
+    height: 20
+
+HudStatsDot < UIWidget
+  size: 14 14
+  anchors.top: parent.top
+  image-smooth: true
+  phantom: false
+
+HudStatsPicker < Panel
+  height: 16
+  margin-top: 6
+
+  GameLabel
+    id: help
+    text: (?)
+    color: #c8c8c8
+    anchors.right: parent.right
+    anchors.top: parent.top
+    phantom: false
+
+  Panel
+    id: dots
+    width: 114
+    height: 14
+    anchors.top: parent.top
+    anchors.horizontalCenter: parent.horizontalCenter
+
+    HudStatsDot
+      id: r
+      anchors.left: parent.left
+    HudStatsDot
+      id: g
+      anchors.left: prev.right
+      margin-left: 6
+    HudStatsDot
+      id: b
+      anchors.left: prev.right
+      margin-left: 6
+    HudStatsDot
+      id: c
+      anchors.left: prev.right
+      margin-left: 6
+    HudStatsDot
+      id: m
+      anchors.left: prev.right
+      margin-left: 6
+    HudStatsDot
+      id: y
+      anchors.left: prev.right
+      margin-left: 6

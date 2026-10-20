@@ -1,0 +1,13 @@
+{
+  "id": "player-info",
+  "name": "Player info",
+  "plan": "free",
+  "minModule": "0.16.0",
+  "about": "Shows the vocation and level of other players next to their names, for example [RP 250] Bob.",
+  "points": ["The tag takes the colour of the player's health", "Vocation and level from a look and from chat", "Copy Name, VIP and the bot still get the real name", "Works with vBot's Check Players", "The top-bar button turns the tags on and off"],
+  "settings": [
+    {"key": "tags", "type": "bool", "label": "Show tags", "default": true},
+    {"key": "vocation", "type": "bool", "label": "Vocation", "default": true},
+    {"key": "level", "type": "bool", "label": "Level", "default": true}
+  ]
+}
