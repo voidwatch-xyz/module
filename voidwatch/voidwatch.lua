@@ -27,7 +27,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.16.0'
+local MODULE = 'voidwatch-feed/0.16.1'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -144,7 +144,7 @@ function unloadAddon(rec)
   for _, w in ipairs(rec.widgets or {}) do pcall(function() if not w:isDestroyed() then w:destroy() end end) end
   if rec.button then pcall(function() rec.button:destroy() end) end
   rec.timers, rec.handlers, rec.env, rec.loaded = {}, {}, nil, false
-  rec.connections, rec.widgets, rec.button, rec.openFn = {}, {}, nil, nil
+  rec.connections, rec.widgets, rec.button, rec.openFn, rec.openLabel = {}, {}, nil, nil, nil
 end
 
 -- an addon's own settings: declared in its addon.json, saved per character, the default while a saved value does not fit
@@ -231,7 +231,7 @@ local function addonApi(rec)
     local tm = modules.client_topmenu
     if rec.button or type(fn) ~= 'function' or not (tm and tm.addRightGameToggleButton) then return rec.button end
     local image = type(icon) == 'string' and icon:match('^[%w_%-]+$') and (api.dir .. icon) or '/images/topbuttons/analyzers'
-    rec.openFn = fn
+    rec.openFn, rec.openLabel = fn, type(tooltip) == 'string' and tooltip or nil
     rec.button = tm.addRightGameToggleButton('vwAddon' .. rec.id:gsub('%-', ''), tostring(tooltip or rec.id), image, function() addonCall(rec, fn) end, false, 950)
     return rec.button
   end
@@ -392,6 +392,7 @@ local function addonView()
     st.here = not off[st.id]
     st.log = rec and rec.log or {}
     st.canOpen = rec ~= nil and rec.loaded == true and (type(rec.handlers.open) == 'function' or rec.openFn ~= nil)
+    st.openLabel = st.canOpen and type(rec.handlers.open) ~= 'function' and rec.openLabel or nil
     st.broken = rec ~= nil and rec.off == true
     st.errors = rec and rec.errors or 0
     st.info = rec and rec.info or nil

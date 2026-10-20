@@ -22,6 +22,7 @@ local button, dot, win, timer, styled, lastState, site
 local pages, tabButtons, shapes, refs = {}, {}, {}, {}
 local current = 'main'                                 -- the open tab, kept while the client runs
 local detail = nil                                     -- the addon the Addons tab shows
+local listScroll = nil                                 -- the addon list's scroll position, put back after a rebuild
 local subtab = 'about'                                 -- the part of the addon details that shows
 local picIndex = {}                                    -- addon id -> the picture its details show
 local form = nil                                       -- the Settings tab while the player edits it
@@ -595,12 +596,19 @@ local function buildDetail(a, v, e)
   if not st then
     actions[#actions + 1] = { 'Install', function() Voidwatch.installAddon(e.id) end }
   elseif st.here ~= false then
-    if st.broken then
-      actions[#actions + 1] = { 'Start again', function() Voidwatch.reloadAddon(e.id) end }
-    elseif st.on then
-      actions[#actions + 1] = { 'Reload', function() Voidwatch.reloadAddon(e.id) end }
+    local function restart()
+      local ok = Voidwatch.reloadAddon(e.id)
+      pcall(function() modules.game_textmessage.displayGameMessage('[Voidwatch] ' .. e.name .. (ok and ' reloaded.' or ' did not start: see Errors.')) end)
     end
-    if st.canOpen then actions[#actions + 1] = { 'Open window', function() Voidwatch.openAddon(e.id) end } end
+    if st.broken then
+      actions[#actions + 1] = { 'Start again', restart }
+    elseif st.on then
+      actions[#actions + 1] = { 'Reload', restart }
+    end
+    if st.canOpen then
+      local label = st.openLabel and #st.openLabel <= 14 and st.openLabel or 'Open window'
+      actions[#actions + 1] = { label, function() Voidwatch.openAddon(e.id) end }
+    end
   end
   for i, key in ipairs({ 'a', 'b' }) do
     local b, act = d.bar[key], actions[i]
@@ -649,6 +657,8 @@ local function buildAddons(page, v)
   local list, byId = addonList(v)
   local sel = selected(list, byId)
   detail = sel and sel.id or nil
+  local at = tonumber(a.list.itemsScroll:getValue()) or 0
+  listScroll = at > 0 and { value = at, fills = 0 } or nil
   buildItems(a, v, list, sel)
   buildDetail(a, v, sel)
 end
@@ -659,6 +669,17 @@ local function fillAddons()
   if not a then return end
   fitWidths(a.list.items)
   scrollIfNeeded(a.list.items, a.list.itemsScroll)
+  -- the rebuilt list is laid out only after the first fill, so its old position fits from the second one on
+  if listScroll then
+    local bar = a.list.itemsScroll
+    listScroll.fills = listScroll.fills + 1
+    if listScroll.fills >= 2 and bar:getMaximum() > 0 then
+      bar:setValue(math.min(listScroll.value, bar:getMaximum()))
+      listScroll = nil
+    elseif listScroll.fills >= 4 then
+      listScroll = nil
+    end
+  end
   local d = refs.detail
   if not d or d:isDestroyed() then return end
   local colW = math.floor((a.detail:getWidth() - a.detail:getPaddingLeft() - a.detail:getPaddingRight() - 14) / 2)

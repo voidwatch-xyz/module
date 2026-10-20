@@ -288,7 +288,7 @@ function init()
     save()
     renamed, queue, queued, looked = {}, {}, {}, {}
   end)
-  button = Addon.button('Player info', 'playerinfo', toggle)
+  button = Addon.button('Tags on/off', 'playerinfo', toggle)
   Addon.every(SWEEP_MS, sweep)
   apply()
 end
