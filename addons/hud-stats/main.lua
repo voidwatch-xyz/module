@@ -319,7 +319,7 @@ local function applyState()
 end
 
 local function setOpen(open)
-  local btn = Addon.button('Stats')
+  local btn = Addon.button('Stats window')
   if btn then btn:setOn(open) end
   if saved and saved.open ~= open then
     saved.open = open
@@ -373,7 +373,7 @@ local function buildWindow()
   window.onOpen = function() setOpen(true) end
   window.onClose = function() setOpen(false) end
   pcall(function() window:setup() end)
-  Addon.button('Stats', nil, toggle)
+  Addon.button('Stats window', nil, toggle)
   applySections()
   fit(true)
 end
