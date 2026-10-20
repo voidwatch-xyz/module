@@ -27,7 +27,7 @@
 
 Voidwatch = { actions = {} }
 
-local MODULE = 'voidwatch-feed/0.15.1'
+local MODULE = 'voidwatch-feed/0.16.0'
 -- the module's own folder, from this file's path: /modules/voidwatch/ in a client that allows modules, or
 -- /bot/_voidwatch/voidwatch/ when voidwatch_start.lua runs it from the bot folder; its data then sits beside it
 local HOME = (debug.getinfo(1, 'S').source or ''):match('^@(.*/)[^/]*$') or '/modules/voidwatch/'
@@ -148,7 +148,7 @@ function unloadAddon(rec)
 end
 
 -- an addon's own settings: declared in its addon.json, saved per character, the default while a saved value does not fit
-local SETTING_TYPES = { bool = true, number = true, choice = true }
+local SETTING_TYPES = { bool = true, number = true, choice = true, text = true }
 
 local function declaredSettings(rec)
   local out = {}
@@ -163,6 +163,7 @@ local function settingFits(s, v)
   if s.type == 'number' then
     return type(v) == 'number' and v == v and (not tonumber(s.min) or v >= tonumber(s.min)) and (not tonumber(s.max) or v <= tonumber(s.max))
   end
+  if s.type == 'text' then return type(v) == 'string' and #v <= (tonumber(s.maxLength) or 40) and not v:find('[%c]') end
   for _, o in ipairs(type(s.options) == 'table' and s.options or {}) do
     if o == v then return true end
   end
@@ -399,7 +400,7 @@ local function addonView()
       local values = addonSettings(rec)
       for _, d in ipairs(declaredSettings(rec)) do
         st.settings[#st.settings + 1] = { key = d.key, type = d.type, label = tostring(d.label or d.key), min = tonumber(d.min), max = tonumber(d.max),
-                                          options = type(d.options) == 'table' and d.options or nil, value = values[d.key] }
+                                          maxLength = tonumber(d.maxLength), options = type(d.options) == 'table' and d.options or nil, value = values[d.key] }
       end
     end
     st.pictures = pictureFiles(st.id)

@@ -560,6 +560,12 @@ local function settingControls(panel, e, list)
         row.value:setCurrentOption(tostring(s.value))
       end)
       row.value.onOptionChange = function(_, text) pcall(Voidwatch.setAddonSetting, e.id, s.key, text) end
+    elseif s.type == 'text' then
+      local row = make('VwTextSetting', panel)
+      row.key:setText(s.label)
+      row.value:setMaxLength(s.maxLength or 40)
+      row.value:setText(tostring(s.value or ''))
+      row.value.onTextChange = function(_, text) pcall(Voidwatch.setAddonSetting, e.id, s.key, text) end
     end
   end
 end

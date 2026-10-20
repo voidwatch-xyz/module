@@ -1,0 +1,13 @@
+{
+  "id": "hud-stats",
+  "name": "HUD stats",
+  "plan": "free",
+  "minModule": "0.16.0",
+  "about": "A Stats window beside the game: exp per hour, time to the next level, damage, healing and kills, each with a 15-minute graph.",
+  "points": ["Exp per hour and raw exp per hour", "Time to the next level", "Damage, healing, mana and damage taken per second", "Your kills per hour", "Session and lifetime records per character", "A 15-minute graph for each value"],
+  "settings": [
+    {"key": "rate", "type": "bool", "label": "Ask the server for the exp rate", "default": false},
+    {"key": "rateCommand", "type": "text", "label": "Exp rate command", "default": "!serverinfo", "maxLength": 40},
+    {"key": "stamina", "type": "bool", "label": "Stamina bonus in raw exp", "default": false}
+  ]
+}
